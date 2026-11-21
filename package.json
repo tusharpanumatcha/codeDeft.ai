@@ -1,7 +1,7 @@
 {
   "name": "codedeft-hybrid",
   "private": true,
-  "version": "0.8.0-migration",
+  "version": "0.9.0-figma-preview",
   "type": "module",
   "scripts": {
     "build": "npm run build:engine",
@@ -12,8 +12,10 @@
     "build:server": "npm --prefix apps/server run build",
     "build:extension": "npm --prefix apps/vscode-extension run build",
     "build:dashboard": "npm --prefix apps/web-dashboard run build",
-    "build:apps": "npm run build:server && npm run build:extension && npm run build:dashboard",
-    "dev:dashboard": "npm --prefix apps/web-dashboard run dev"
+    "build:apps": "npm run build:figma && npm run build:server && npm run build:extension && npm run build:dashboard",
+    "dev:dashboard": "npm --prefix apps/web-dashboard run dev",
+    "build:figma": "npm --prefix packages/figma-reader run build",
+    "test:figma": "npm run build:figma && npm --prefix packages/figma-reader test"
   },
   "engines": {
     "node": ">=22.13.0"

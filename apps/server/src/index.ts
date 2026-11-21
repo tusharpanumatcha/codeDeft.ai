@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RepositoryStore } from '../../../packages/engine/dist/storage.js';
 import { queryRepository } from '../../../packages/engine/dist/index.js';
+import { planFromDesign, proposeDesign, validateGenerated } from './figma-workflow.js';
 
 const here = path.resolve(process.cwd(), 'apps/server');
 const root = path.resolve(here, '../..');
@@ -16,7 +17,7 @@ const database = process.env.CODEDEFT_DB || path.join(root, 'data/codedeft.db');
 const port = Number(process.env.CODEDEFT_PORT || 4317);
 const host = '127.0.0.1';
 const token = process.env.CODEDEFT_TOKEN || '';
-const MAX_BODY = 1024 * 1024;
+const MAX_BODY = 4 * 1024 * 1024;
 
 // Only these Host/Origin values are accepted. Checking Host blocks DNS-rebinding attacks, where a
 // website points its own domain at 127.0.0.1 so the browser treats this server as same-origin.
@@ -77,6 +78,15 @@ const server = http.createServer(async (req, res) => {
     if (token && req.headers['x-codedeft-token'] !== token) return json(res, 401, { error: 'Invalid local API token' });
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, version: '0.8.0-migration' });
+      if(req.method==='POST' && ['/api/figma/plan','/api/figma/generate','/api/figma/validate'].includes(url.pathname)) {
+        const input=await body(req);const repo=safeRoot(input.repository);
+        if(url.pathname==='/api/figma/validate')return json(res,200,validateGenerated(repo,input.proposal));
+        if(url.pathname==='/api/figma/plan'){
+          const {plan,summary}=planFromDesign(repo,input.design);
+          return json(res,200,{design:summary,repositoryEvidence:plan.relevantFiles.map(f=>({path:f.path,score:f.score,reasons:f.reasons})),warnings:plan.warnings});
+        }
+        return json(res,200,await proposeDesign(repo,input.design,{apiKey:process.env.CODEDEFT_API_KEY,model:process.env.CODEDEFT_MODEL,endpoint:process.env.CODEDEFT_ENDPOINT}));
+      }
       const store = new RepositoryStore(database);
       try {
         if (req.method === 'POST' && url.pathname === '/api/index') {

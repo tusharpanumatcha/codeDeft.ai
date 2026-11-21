@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {designSummary,parseProposal,planFromDesign} from '../apps/server/dist/figma-workflow.js';
+const design={name:'Login',fileKey:'ABC',nodeCount:2,nodes:[{id:'1',name:'Login Frame',type:'FRAME',children:[{id:'2',name:'Sign in',type:'TEXT',text:{content:'Sign in'}}]}]};
+test('design summary collects Figma text',()=>assert.deepEqual(designSummary(design).texts,['Sign in']));
+test('proposal rejects traversal',()=>assert.throws(()=>parseProposal(JSON.stringify({changes:[{path:'../.env',content:'x'}]})),/Unsafe/));
+test('plan uses repository evidence',()=>{const dir=mkdtempSync(join(tmpdir(),'codedeft-figma-test-'));try{writeFileSync(join(dir,'Login.vue'),'<template><button>Sign in</button></template>');const result=planFromDesign(dir,design);assert.equal(result.summary.nodeCount,2);assert.equal(result.plan.repository,dir)}finally{rmSync(dir,{recursive:true,force:true})}});

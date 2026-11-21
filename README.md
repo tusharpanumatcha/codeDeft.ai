@@ -112,3 +112,7 @@ This is a **functional first vertical slice**, not the entire roadmap. The UI ha
 ### Security
 
 The server binds to `127.0.0.1` only and does not run arbitrary commands or write source files. It can index any local directory path the user submits, so do not expose it to other users or networks. Requests with a foreign `Host` or `Origin`, and POSTs that are not `application/json`, are refused, which blocks websites in your browser from using the API. Optionally set `CODEDEFT_TOKEN` as defence in depth against other local programs; the dashboard receives it automatically and the VS Code extension needs the same value in `codedeft.apiToken`. Keep the server local. Do not commit database files, secrets or `.env` files.
+
+## Figma URL-first import
+
+In the VS Code Command Palette run **codeDeft: Chat (Figma or Repository)** and enter `figma` or paste a Figma frame URL. The workflow asks for the URL first, connects with a securely stored PAT only if needed, retrieves and normalizes the selected design, then offers **Analyze** or **Generate Proposal** using the existing engine. See [FIGMA_WORKFLOW.md](FIGMA_WORKFLOW.md).

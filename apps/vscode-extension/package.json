@@ -14,11 +14,19 @@
   "activationEvents": [
     "onCommand:codedeft.ask",
     "onCommand:codedeft.index",
-    "onCommand:codedeft.dashboard"
+    "onCommand:codedeft.dashboard",
+    "onCommand:codedeft.figmaConnect",
+    "onCommand:codedeft.figmaRead",
+    "onCommand:codedeft.figmaDisconnect",
+    "onCommand:codedeft.chat"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "codedeft.chat",
+        "title": "codeDeft: Chat (Figma or Repository)"
+      },
       {
         "command": "codedeft.ask",
         "title": "codeDeft: Ask Repository"
@@ -30,6 +38,18 @@
       {
         "command": "codedeft.dashboard",
         "title": "codeDeft: Open Dashboard"
+      },
+      {
+        "command": "codedeft.figmaConnect",
+        "title": "codeDeft: Connect to Figma (PAT)"
+      },
+      {
+        "command": "codedeft.figmaRead",
+        "title": "codeDeft: Read Figma Design"
+      },
+      {
+        "command": "codedeft.figmaDisconnect",
+        "title": "codeDeft: Disconnect Figma"
       }
     ],
     "configuration": {
