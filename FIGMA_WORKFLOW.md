@@ -1,4 +1,4 @@
-# codeDeft Figma-to-Code (v0.9 preview)
+# codeDeft Figma-to-Code (v0.10)
 
 ## Setup
 
@@ -7,7 +7,11 @@ npm run build
 npm start
 ```
 
-In VS Code, open `apps/vscode-extension` and press F5 to launch the Extension Development Host. Run **codeDeft: Chat (Figma or Repository)** and type `figma`, `connect to figma`, or paste a Figma URL directly. Alternatively run **codeDeft: Read Figma Design**. codeDeft asks for the **Figma frame URL first**; if no PAT is stored, it then prompts to connect and securely enter one. Subsequent reads reuse the saved PAT. The token is kept in VS Code `SecretStorage` and is sent directly from the extension to Figma; it is **never sent to the codeDeft server**.
+In VS Code, open `apps/vscode-extension` and press F5 to launch the Extension Development Host. Run **codeDeft: Chat (Figma or Repository)** and type `figma`, `connect to figma`, or paste a Figma URL directly. Alternatively run **codeDeft: Read Figma Design**. codeDeft asks for the **Figma frame URL first**; if no PAT is stored, it then prompts to connect and securely enter one. Subsequent reads reuse the saved PAT. In VS Code the token is kept in `SecretStorage` and sent directly from the extension to Figma; it is never sent to the codeDeft server.
+
+### Web dashboard
+
+Open **Figma-to-Code** (or paste a Figma link into Chat). Paste the frame link and your token and choose **Read design**. Here the token **is** sent to the local codeDeft server, which uses it for that one request to Figma. It is not stored (browser or server), not logged and never included in responses or errors. The token field is cleared after a successful read and kept after a failed one so you can retry. The design stays on the server (see the README's Architecture section) and the page works with a short `designId`, so large designs do not slow the page down or hit the request limit. Generated proposals can be opened in VS Code with **Open in VS Code** for review and approval.
 
 Use a Figma token with read access to the file. The Figma API may return 403 if permissions/scopes are insufficient.
 
@@ -30,8 +34,10 @@ After **Generate Proposal** the extension offers validation **before** the appro
 
 ### API
 
-- `POST /api/figma/plan` with `{repository,design}` → design summary and retrieved repository evidence
-- `POST /api/figma/generate` with `{repository,design}` → proposed file changes, reuse/duplication report, and explicit unknown visual/functional relevance
+- `POST /api/figma/read` with `{url,token}` → `{designId,expiresAt,summary,warnings}` (web dashboard)
+- `GET /api/figma/designs/:designId` → the stored normalized design
+- `POST /api/figma/plan` with `{repository,designId}` or `{repository,design}` → design summary and retrieved repository evidence
+- `POST /api/figma/generate` with `{repository,designId}` or `{repository,design}` → proposed file changes with a `proposalId`, reuse/duplication report, and explicit unknown visual/functional relevance
 - `POST /api/figma/validate` with `{repository,proposal,install?}` → isolated validation report. Without `install: true` every check is reported as skipped.
 
 All endpoints use existing loopback-only API host/origin checks and optional `CODEDEFT_TOKEN`. Do not expose this local API on the public internet.

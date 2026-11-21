@@ -1,4 +1,4 @@
-# codeDeft · v0.9
+# codeDeft · v0.10
 
 **Understand First. Code Better.**
 
@@ -15,11 +15,35 @@ A local-first repository intelligence tool: a TypeScript/SQLite engine, a local 
 ## Build and run
 
 ```bash
-npm run build        # engine, Figma reader, server, VS Code extension, dashboard
+npm run build        # engine, protocol, Figma reader, server, VS Code extension, dashboard
 npm start            # http://127.0.0.1:4317
 ```
 
-The server locates its files relative to itself, so `npm start` from the root, `npm --prefix apps/server start` and `node apps/server/dist/index.js` from any directory all work. If the dashboard has not been built, `/` returns a 503 explaining how to build it; the API still works.
+`npm start` runs a pre-flight check first: it refuses to start if a required part is not built and warns when a build is older than its source (the cause of blank pages and "Unknown API endpoint" errors). The server locates its files relative to itself, so it also works when started from another directory. If only the dashboard is missing, `/` explains how to build it; the API still works.
+
+## Architecture
+
+```
+packages/protocol      shared contract: wire types, API version + capabilities, resilient HTTP client, chat router
+packages/engine        indexing, retrieval, evaluation, validation, the shared path-safety rule
+packages/figma-reader  Figma URL parsing, REST client, normalisation
+apps/server            local API (127.0.0.1 only) + dashboard host; in-memory design and proposal stores
+apps/web-dashboard     React dashboard: one component per view, error boundaries, vitest + jsdom tests
+apps/vscode-extension  commands, review/approval flow, vscode:// proposal handoff (bundled with esbuild)
+```
+
+**Versions never crash each other.** The server reports `api.version`, `api.minClient` and a `capabilities` list at `/api/health`. The dashboard and extension negotiate once with the shared client (`packages/protocol`):
+- an older server (API 1, v0.7–v0.9) is still used; features it lacks are switched off with a message saying what to update;
+- a newer server is used as long as it still serves this client; new capabilities are ignored;
+- only a server that needs a newer client, or no server at all, is refused, with a clear message and a retry.
+
+Changes within an API version are additive. Every response is normalised before use, every error is an `ApiError` with a stable `code`, requests have timeouts and can be cancelled, and each dashboard panel has its own error boundary, so a malformed response or a bug in one view cannot take down the page or the extension.
+
+**Large designs stay on the server.** `/api/figma/read` stores the normalised design in a bounded LRU cache (entry, byte and sliding-TTL budgets; content-addressed ids) and returns a short `designId`. Analysis and generation reference that id instead of re-uploading megabytes. The VS Code extension still sends designs inline, which every server version accepts.
+
+**Dashboard → VS Code handoff.** Generated proposals are stored (random ids, bounded cache) and the dashboard shows **Open in VS Code**, a `vscode://codedeft-local.codedeft-vscode/proposal?id=…` link. The extension fetches the proposal and runs the same review-and-approve flow; it warns if the proposal was generated for a different folder. **codeDeft: Open Proposal by ID** does the same from the Command Palette. Stores live in server memory and are cleared on restart.
+
+**Chat routing.** One deterministic, tested router (`routeChatMessage`) is used by both the dashboard and the extension. A Figma link anywhere in a message is extracted exactly; otherwise weighted evidence decides between reuse and search, and weak or ambiguous wording falls back to read-only search.
 
 Open **http://127.0.0.1:4317**, enter the absolute path of a repository and click **Index repository**. The database is stored in `data/codedeft.db` (git-ignored; override with `CODEDEFT_DB`).
 
@@ -41,16 +65,23 @@ The extension is bundled with esbuild into a single `dist/extension.js` (the Fig
 | `CODEDEFT_ENDPOINT`, `CODEDEFT_MODEL`, `CODEDEFT_API_KEY` | OpenAI-compatible chat-completions endpoint for generation |
 | `CODEDEFT_MODEL_TIMEOUT_MS` | Model timeout (default 180000) |
 | `CODEDEFT_JSON_MODE` | Set to `0` to stop sending `response_format: json_object` (it is also dropped automatically if the endpoint answers HTTP 400) |
+| `CODEDEFT_FIGMA_API_BASE` | Figma REST base URL (default `https://api.figma.com`; HTTPS required except loopback) |
+| `CODEDEFT_DESIGN_TTL_MS`, `CODEDEFT_DESIGN_CACHE_MB` | Design store lifetime (sliding, default 2 h) and memory budget (default 96 MB) |
+| `CODEDEFT_PROPOSAL_TTL_MS`, `CODEDEFT_PROPOSAL_CACHE_MB` | Proposal store lifetime (default 24 h) and memory budget (default 64 MB) |
 
 ## API
 
-- `GET /api/health` → `{ ok, version }`
+- `GET /api/health` → `{ ok, version, api: { version, minClient }, capabilities }`
 - `POST /api/index` `{ repository }`
 - `GET /api/info?repository=…`
 - `POST /api/search` `{ repository, query, limit? }`
 - `GET /api/graph?repository=…&filter=…`
 - `POST /api/reuse/discover`, `POST /api/reuse/decision`, `POST /api/reuse/independent/generate` — see [REUSE_INTELLIGENCE.md](REUSE_INTELLIGENCE.md) and [INDEPENDENT_REUSE.md](INDEPENDENT_REUSE.md)
-- `POST /api/figma/plan`, `/api/figma/generate`, `/api/figma/validate` — see [FIGMA_WORKFLOW.md](FIGMA_WORKFLOW.md)
+- `POST /api/figma/read` `{ url, token }` → `{ designId, expiresAt, summary, warnings }`; `GET /api/figma/designs/:id`
+- `POST /api/figma/plan`, `/api/figma/generate` with `{ repository, designId }` or `{ repository, design }`; `POST /api/figma/validate` — see [FIGMA_WORKFLOW.md](FIGMA_WORKFLOW.md)
+- `GET /api/proposals/:id` — a generated proposal (generate responses include `proposalId`)
+
+Errors are `{ error, code }` (`bad_request`, `unauthorized`, `forbidden`, `not_found`, `unsupported_endpoint`, `payload_too_large`, `upstream_error`, `timeout`, `internal`).
 
 Request bodies are limited to 4 MB (HTTP 413 beyond that). Generation endpoints use the stored SQLite index when the repository has been indexed, otherwise they index it in memory.
 
@@ -98,7 +129,7 @@ Reference results on sample login pages: identical files 1.00, same logic with r
 
 ```bash
 npm run build
-npm run test:all   # server (security, UTF-8, start-up), generation, engine, Figma reader, reuse scan, VS Code extension
+npm run test:all   # protocol, server (incl. API 2 end-to-end), engine, Figma reader, stores, extension, dashboard (vitest + jsdom)
 ```
 
 ## Security model
@@ -107,6 +138,7 @@ npm run test:all   # server (security, UTF-8, start-up), generation, engine, Fig
 - The server never writes into your repository. Generated code is returned as a proposal; the VS Code extension's **Approve and Create** dialog is the only way files are created, and it only creates new files (never overwrites).
 - **One path rule** (`packages/engine/src/safe-path.ts`) is used by the server, the extension and CLI validation. Proposed paths must be relative, must not contain `..`, `node_modules` or any segment starting with `.` (blocking `.git`, `.vscode`, `.github`, `.husky`, `.env*`, `.npmrc` and similar), and are compared case-insensitively because macOS and Windows file systems are case-insensitive. Symlinked targets and parent directories are refused.
 - Validation runs in a temporary copy. Running checks requires an explicit opt-in because it installs dependencies and runs the repository's own scripts, which can execute arbitrary code. Scripts get an allow-listed environment without API keys.
+- Figma tokens: the VS Code extension keeps the token in SecretStorage and calls Figma directly. The web dashboard sends it once to the local server for the single Figma request; the server never stores, logs or returns it.
 - Repository excerpts and Figma text are sent to the model you configure. Review them for secrets before using an external model. Do not expose the server to other users or networks.
 
 ## Scope and limitations

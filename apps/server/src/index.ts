@@ -9,7 +9,10 @@ import { queryRepository, indexRepository, createAgentPlan, type RepositoryIndex
 import { generateWithModel, type ModelConfig } from '../../../packages/engine/dist/agent.js';
 import { findReusable, buildReuseDecision } from './reuse-intelligence.js';
 import { independentInstruction, assertIndependentProposal, previewIndependentProposal } from './reuse-decision.js';
-import { parseProposal, planFromDesign, proposeDesign, validateGenerated } from './figma-workflow.js';
+import { parseProposal, planFromDesign, proposeDesign, validateGenerated, designSummary } from './figma-workflow.js';
+import { readFigma, FigmaReadError, figmaApiBase } from '../../../packages/figma-reader/dist/index.js';
+import { API_VERSION, MIN_CLIENT_API, ALL_CAPABILITIES, type ErrorCode, type GeneratedProposal } from '../../../packages/protocol/dist/index.js';
+import { DesignStore, ProposalStore } from './stores.js';
 
 // Paths are relative to this file (apps/server/dist/index.js), never to the current directory,
 // so `npm start`, `npm --prefix apps/server start` and `node dist/index.js` all behave the same.
@@ -35,7 +38,22 @@ const securityHeaders: Record<string, string> = {
   'cross-origin-resource-policy': 'same-origin'
 };
 
-class HttpError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+class HttpError extends Error { constructor(readonly status: number, message: string, readonly code: ErrorCode = 'bad_request') { super(message); } }
+
+const designs = new DesignStore();
+const proposals = new ProposalStore();
+// Validate the Figma API override once at start-up, so a bad value fails loudly instead of per request.
+const figmaBase = figmaApiBase(process.env.CODEDEFT_FIGMA_API_BASE);
+
+/** Maps any thrown value to a status, a stable code and a message that is safe to show (never contains secrets). */
+function errorResponse(error: unknown): { status: number; code: ErrorCode; message: string } {
+  if (error instanceof HttpError) return { status: error.status, code: error.code, message: error.message };
+  if (error instanceof FigmaReadError) return { status: error.kind === 'timeout' ? 504 : 502, code: error.kind === 'timeout' ? 'timeout' : 'upstream_error', message: error.message };
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timed out/i.test(message)) return { status: 504, code: 'timeout', message };
+  if (/^Model request failed/.test(message)) return { status: 502, code: 'upstream_error', message };
+  return { status: 400, code: 'bad_request', message };
+}
 
 function json(res: http.ServerResponse, status: number, obj: unknown): void {
   res.writeHead(status, { ...securityHeaders, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -53,7 +71,7 @@ async function body(req: http.IncomingMessage): Promise<Record<string, unknown>>
     if (size > MAX_BODY_BYTES * 8) { req.destroy(); break; }
     if (size <= MAX_BODY_BYTES) chunks.push(buffer);
   }
-  if (size > MAX_BODY_BYTES) throw new HttpError(413, `Request too large (limit ${MAX_BODY_BYTES / 1024 / 1024} MB). For Figma, select a single frame.`);
+  if (size > MAX_BODY_BYTES) throw new HttpError(413, `Request too large (limit ${MAX_BODY_BYTES / 1024 / 1024} MB). For Figma, select a single frame.`, 'payload_too_large');
   if (!size) return {};
   let data: unknown;
   try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'Request body is not valid JSON'); }
@@ -116,18 +134,50 @@ function indexHtml(): string | undefined {
 
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   const { method } = req; const route = url.pathname;
-  if (method === 'GET' && route === '/api/health') return json(res, 200, { ok: true, version });
+  if (method === 'GET' && route === '/api/health') return json(res, 200, { ok: true, version, api: { version: API_VERSION, minClient: MIN_CLIENT_API }, capabilities: ALL_CAPABILITIES });
+
+  // Server-side Figma read for the web dashboard. The token is used for this one upstream request only:
+  // it is not stored, logged or included in any response or error message.
+  if (method === 'POST' && route === '/api/figma/read') {
+    const input = await body(req);
+    if (typeof input.url !== 'string' || !input.url.trim()) throw new HttpError(400, 'Figma URL required');
+    if (typeof input.token !== 'string' || !input.token.trim()) throw new HttpError(400, 'Figma personal access token required');
+    const design = await readFigma(input.url.trim(), input.token, { apiBase: figmaBase });
+    const stored = designs.put(design);
+    return json(res, 200, { designId: stored.id, expiresAt: stored.expiresAt, summary: designSummary(design), warnings: design.warnings });
+  }
+  const designMatch = route.match(/^\/api\/figma\/designs\/([^/]+)$/);
+  if (method === 'GET' && designMatch) {
+    const design = designs.get(decodeURIComponent(designMatch[1]!));
+    if (!design) throw new HttpError(404, 'Design not found or expired (designs are kept in server memory for a limited time and cleared on restart). Read it again.', 'not_found');
+    return json(res, 200, design);
+  }
+  const proposalMatch = route.match(/^\/api\/proposals\/([^/]+)$/);
+  if (method === 'GET' && proposalMatch) {
+    const stored = proposals.get(decodeURIComponent(proposalMatch[1]!));
+    if (!stored) throw new HttpError(404, 'Proposal not found or expired (proposals are kept in server memory and cleared on restart). Generate it again.', 'not_found');
+    return json(res, 200, stored);
+  }
 
   if (method === 'POST' && ['/api/figma/plan', '/api/figma/generate', '/api/figma/validate'].includes(route)) {
     const input = await body(req); const repo = safeRoot(input.repository);
     if (input.decision !== undefined && input.decision !== 'independent') throw new Error('Only independent mode is implemented');
     if (route === '/api/figma/validate') return json(res, 200, validateGenerated(repo, input.proposal, { install: input.install === true }));
+    // Designs arrive either by reference (dashboard, API 2) or inline (VS Code extension, older clients).
+    let design: unknown = input.design;
+    if (typeof input.designId === 'string') {
+      design = designs.get(input.designId);
+      if (!design) throw new HttpError(404, 'Design not found or expired. Read the Figma design again.', 'not_found');
+    }
+    if (design === undefined) throw new HttpError(400, 'Provide designId or design');
     const index = loadIndex(repo);
     if (route === '/api/figma/plan') {
-      const { plan, summary } = planFromDesign(repo, input.design, { index });
+      const { plan, summary } = planFromDesign(repo, design, { index });
       return json(res, 200, { design: summary, repositoryEvidence: plan.relevantFiles.map(f => ({ path: f.path, score: f.score, reasons: f.reasons })), warnings: plan.warnings });
     }
-    return json(res, 200, await proposeDesign(repo, input.design, modelConfig(), { index }));
+    const result = await proposeDesign(repo, design, modelConfig(), { index });
+    const stored = proposals.put({ repository: repo, source: 'figma.generate', task: `Figma design ${result.design.name}`, result: result as unknown as GeneratedProposal });
+    return json(res, 200, stored.result);
   }
   if (method === 'POST' && route === '/api/reuse/discover') {
     const input = await body(req); const repo = safeRoot(input.repository);
@@ -148,7 +198,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const response = await generateWithModel(plan, config as ModelConfig);
     const proposal = parseProposal(response.content);
     assertIndependentProposal(repo, proposal);
-    return json(res, 200, { decision: 'independent', approvalRequired: true, proposal, preview: previewIndependentProposal(repo, proposal), repositoryEvidence: plan.relevantFiles.map(f => ({ path: f.path, score: f.score, reasons: f.reasons })), warning: 'Proposal only; no files were applied.' });
+    const result = { decision: 'independent' as const, approvalRequired: true as const, proposal, preview: previewIndependentProposal(repo, proposal), repositoryEvidence: plan.relevantFiles.map(f => ({ path: f.path, score: f.score, reasons: f.reasons })), warning: 'Proposal only; no files were applied.' };
+    return json(res, 200, proposals.put({ repository: repo, source: 'reuse.generate', task, result }).result);
   }
 
   const store = new RepositoryStore(database);
@@ -172,11 +223,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       return json(res, 200, { repository: repo, edges, limited: index.edges.length > 200 });
     }
   } finally { store.close(); }
-  return json(res, 404, { error: 'Unknown API endpoint' });
+  // Exact text kept for API-1 clients, which recognise unsupported endpoints by it.
+  return json(res, 404, { error: 'Unknown API endpoint', code: 'unsupported_endpoint' });
 }
 
 function handleStatic(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
   if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
+  if (url.pathname === '/favicon.ico') { res.writeHead(204, securityHeaders); res.end(); return; }
   const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   if (name !== 'index.html' && !/^assets\/[a-zA-Z0-9_.-]+\.(js|css)$/.test(name)) return json(res, 404, { error: 'Not found' });
   const type = name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html';
@@ -196,22 +249,22 @@ function handleStatic(req: http.IncomingMessage, res: http.ServerResponse, url: 
 const server = http.createServer(async (req, res) => {
   try {
     const refused = rejectReason(req);
-    if (refused) return json(res, 403, { error: refused });
+    if (refused) return json(res, 403, { error: refused, code: 'forbidden' });
     const url = new URL(req.url || '/', `http://${host}:${port}`);
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, { ...securityHeaders, 'access-control-allow-origin': `http://127.0.0.1:${port}`, 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type, x-codedeft-token' });
+      res.writeHead(204, { ...securityHeaders, 'access-control-allow-origin': `http://127.0.0.1:${port}`, 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type, x-codedeft-token, x-codedeft-client' });
       return void res.end();
     }
     if (url.pathname.startsWith('/api/')) {
-      if (token && !tokenMatches(req.headers['x-codedeft-token'])) return json(res, 401, { error: 'Invalid local API token' });
+      if (token && !tokenMatches(req.headers['x-codedeft-token'])) return json(res, 401, { error: 'Invalid local API token', code: 'unauthorized' });
       try { return await handleApi(req, res, url); }
-      catch (error) { return json(res, error instanceof HttpError ? error.status : 400, { error: error instanceof Error ? error.message : String(error) }); }
+      catch (error) { const e = errorResponse(error); return json(res, e.status, { error: e.message, code: e.code }); }
     }
     return handleStatic(req, res, url);
   } catch (error) {
     // Last-resort guard: an unexpected error must answer this request, not crash the server.
-    console.error(error);
-    if (!res.headersSent) json(res, 500, { error: 'Internal server error' }); else res.destroy();
+    console.error(error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : "Non-error thrown"); // message + stack only; request data is never logged
+    if (!res.headersSent) json(res, 500, { error: 'Internal server error', code: 'internal' }); else res.destroy();
   }
 });
 

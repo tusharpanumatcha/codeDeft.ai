@@ -35,13 +35,34 @@ export function normalizeFigmaResponse(fileKey:string,response:any,nodeId?:strin
  const counter={count:0};const nodes=roots.map((node:any)=>normalize(node,counter));
  return {fileKey,nodeId,name:String(response.name??roots[0]?.name??'Figma design'),fetchedAt:new Date().toISOString(),nodes,nodeCount:counter.count,warnings:[]};
 }
-export async function readFigma(url:string,token:string):Promise<DesignDocument>{
+export type ReadFigmaOptions = {
+ /** Figma REST base URL. Defaults to https://api.figma.com; override for corporate proxies or tests. HTTPS required except loopback. */
+ apiBase?:string;
+ fetchImpl?:typeof fetch;
+ timeoutMs?:number;
+};
+/** Error from the Figma API or network. Never contains the access token. */
+export class FigmaReadError extends Error{constructor(message:string,readonly status:number,readonly kind:'auth'|'not_found'|'upstream'|'timeout'|'network'){super(message);this.name='FigmaReadError';}}
+export function figmaApiBase(value?:string):string{
+ const base=new URL(value||'https://api.figma.com');
+ if(base.protocol!=='https:'&&!(base.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(base.hostname)))throw new Error('Figma API base must use HTTPS (or loopback HTTP for tests)');
+ return base.toString().replace(/\/+$/,'');
+}
+export async function readFigma(url:string,token:string,options:ReadFigmaOptions={}):Promise<DesignDocument>{
  if(!token?.trim())throw new Error('Figma personal access token required');const {fileKey,nodeId,branchOf}=parseFigmaUrl(url);
- const endpoint=nodeId?`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}/nodes?ids=${encodeURIComponent(nodeId)}`:`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}`;
- const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),30000);
+ const base=figmaApiBase(options.apiBase);
+ const endpoint=nodeId?`${base}/v1/files/${encodeURIComponent(fileKey)}/nodes?ids=${encodeURIComponent(nodeId)}`:`${base}/v1/files/${encodeURIComponent(fileKey)}`;
+ const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),options.timeoutMs??30000);
+ const doFetch=options.fetchImpl??fetch;
  try{
-  const response=await fetch(endpoint,{headers:{'X-Figma-Token':token},signal:controller.signal});
-  if(!response.ok)throw new Error(`Figma API HTTP ${response.status}${response.status===403?' (check file access and token scopes)':''}${response.status===404&&branchOf?' (branch not found or not shared with this token)':''}`);
+  let response:Response;
+  try{response=await doFetch(endpoint,{headers:{'X-Figma-Token':token.trim()},signal:controller.signal});}
+  catch{throw controller.signal.aborted?new FigmaReadError('Figma did not respond in time',504,'timeout'):new FigmaReadError('Could not reach the Figma API',502,'network');}
+  if(!response.ok){
+   const kind=response.status===401||response.status===403?'auth':response.status===404?'not_found':'upstream';
+   const hint=kind==='auth'?' (check the token and that it can read this file)':kind==='not_found'?(branchOf?' (branch not found or not shared with this token)':' (file or frame not found)'):'';
+   throw new FigmaReadError(`Figma API HTTP ${response.status}${hint}`,response.status,kind);
+  }
   const design=normalizeFigmaResponse(fileKey,await response.json(),nodeId);
   if(branchOf)design.warnings.push(`Read from branch ${fileKey} of file ${branchOf}.`);
   return design;

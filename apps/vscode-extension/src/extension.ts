@@ -5,11 +5,12 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { readFigma, parseFigmaUrl, type DesignDocument } from '../../../packages/figma-reader/src/index';
 import { resolveProposalTarget, proposalPathKey } from '../../../packages/engine/src/safe-path';
+import { createApiClient, endpoints, routeChatMessage, ApiError, type GeneratedProposal, type SearchHit, type ReuseUnit } from '../../../packages/protocol/src/index';
 
 type ProposedChange = { path: string; content: string };
 type IndependentResult = { decision?: string; approvalRequired?: boolean; proposal?: { changes?: ProposedChange[]; rationale?: string } };
-type Hit = { file: string; score: number; reasons: string[]; symbols?: { line: number }[] };
-type ReuseUnit = { name: string; kind: string; file: string; startLine: number; endLine: number; score: number; reasons: string[]; effort: { level: string; reasons: string[] }; usedBy: string[]; imports: string[]; excerpt: string };
+declare const __EXTENSION_VERSION__: string;
+const EXTENSION_VERSION = typeof __EXTENSION_VERSION__ === 'string' ? __EXTENSION_VERSION__ : 'dev';
 
 const MAX_FILES = 30;
 const MAX_FILE_CHARS = 500_000;
@@ -19,36 +20,45 @@ const MAX_DESIGN_UPLOAD_BYTES = 3_800_000;
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('codeDeft'); context.subscriptions.push(output);
   const root = (): string => { const folder = vscode.workspace.workspaceFolders?.[0]; if (!folder) throw new Error('Open a repository folder in VS Code first'); return folder.uri.fsPath; };
-  const request = async <T = any>(endpoint: string, data: unknown): Promise<T> => {
-    const config = vscode.workspace.getConfiguration('codedeft');
-    const base = config.get<string>('serverUrl', 'http://127.0.0.1:4317'); const token = config.get<string>('apiToken', '');
-    const response = await fetch(new URL(endpoint, base), { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { 'x-codedeft-token': token } : {}) }, body: JSON.stringify(data) });
-    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` })) as T & { error?: string };
-    if (!response.ok) throw new Error(result.error || 'Request failed');
-    return result;
+  // One API client per server URL. It negotiates the API version and capabilities with the server once,
+  // so a newer or older server turns features off with a clear message instead of failing mid-command.
+  const config = () => vscode.workspace.getConfiguration('codedeft');
+  const makeApi = () => endpoints(createApiClient({ client: `vscode-extension/${EXTENSION_VERSION}`, baseUrl: config().get<string>('serverUrl', 'http://127.0.0.1:4317'), token: () => config().get<string>('apiToken', '') || undefined }));
+  let api = makeApi();
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('codedeft')) api = makeApi(); }));
+  const guard = async (fn: () => Promise<unknown>) => {
+    try { await fn(); }
+    catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (e instanceof ApiError && (e.code === 'network' || e.code === 'incompatible')) {
+        const choice = await vscode.window.showErrorMessage(`codeDeft: ${message}`, 'Open Settings');
+        if (choice === 'Open Settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'codedeft');
+      } else if (!(e instanceof ApiError && e.code === 'aborted')) vscode.window.showErrorMessage(`codeDeft: ${message}`);
+    }
   };
-  const guard = async (fn: () => Promise<unknown>) => { try { await fn(); } catch (e) { vscode.window.showErrorMessage(`codeDeft: ${e instanceof Error ? e.message : String(e)}`); } };
   const register = (id: string, fn: () => Promise<unknown>) => context.subscriptions.push(vscode.commands.registerCommand(id, () => guard(fn)));
 
   register('codedeft.index', async () => {
-    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft indexing repository' }, () => request<{ files: number; symbols: number }>('/api/index', { repository: root() }));
-    vscode.window.showInformationMessage(`codeDeft indexed ${result.files} files and ${result.symbols} symbols`);
+    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft indexing repository' }, () => api.index(root()));
+    vscode.window.showInformationMessage(`codeDeft indexed ${result?.files ?? 0} files and ${result?.symbols ?? 0} symbols`);
   });
 
-  register('codedeft.ask', async () => {
-    const question = await vscode.window.showInputBox({ prompt: 'Ask codeDeft about this repository', placeHolder: 'How is authentication implemented?' });
-    if (!question) return;
-    const result = await request<{ hits: Hit[] }>('/api/search', { repository: root(), query: question });
+  const askRepository = async (question: string) => {
+    const hits: SearchHit[] = await api.search(root(), question);
     output.clear(); output.appendLine(`codeDeft · ${question}\n`);
-    for (const hit of result.hits) { output.appendLine(`${hit.file} (score ${hit.score})`); output.appendLine(`  ${hit.reasons.join(', ')}\n`); }
-    if (!result.hits.length) output.appendLine('No matching files.');
+    for (const hit of hits) { output.appendLine(`${hit.file} (score ${hit.score})`); output.appendLine(`  ${hit.reasons.join(', ')}\n`); }
+    if (!hits.length) output.appendLine('No matching files.');
     output.show(true);
-    if (!result.hits.length) return;
-    const picked = await vscode.window.showQuickPick(result.hits.map(h => ({ label: h.file, description: `Score ${h.score}`, detail: h.reasons.join(', '), hit: h })), { placeHolder: 'Select a relevant file to open' });
+    if (!hits.length) return;
+    const picked = await vscode.window.showQuickPick(hits.map(h => ({ label: h.file, description: `Score ${h.score}`, detail: h.reasons.join(', '), hit: h })), { placeHolder: 'Select a relevant file to open' });
     if (!picked) return;
     const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root(), picked.hit.file))));
     const line = Math.max(0, (picked.hit.symbols?.[0]?.line || 1) - 1);
     editor.revealRange(new vscode.Range(line, 0, line, 0));
+  };
+  register('codedeft.ask', async () => {
+    const question = await vscode.window.showInputBox({ prompt: 'Ask codeDeft about this repository', placeHolder: 'How is authentication implemented?' });
+    if (question) await askRepository(question);
   });
 
   /** Throws unless every change is a new file at a safe path; returns absolute targets. */
@@ -91,12 +101,12 @@ export function activate(context: vscode.ExtensionContext): void {
     return true;
   };
 
-  register('codedeft.reuseDiscover', async () => {
-    const requirement = await vscode.window.showInputBox({ prompt: 'What functionality should codeDeft look for?', placeHolder: 'JWT validation, data table, date formatting, API retry, ...', ignoreFocusOut: true });
+  const reuseDiscover = async (prefill?: string) => {
+    const requirement = prefill || await vscode.window.showInputBox({ prompt: 'What functionality should codeDeft look for?', placeHolder: 'JWT validation, data table, date formatting, API retry, ...', ignoreFocusOut: true });
     if (!requirement) return;
-    const found = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft scanning reusable code' }, () => request<{ results?: ReuseUnit[] }>('/api/reuse/discover', { repository: root(), requirement, limit: 15 }));
-    if (!found.results?.length) { vscode.window.showInformationMessage('codeDeft: No likely reusable code found.'); return; }
-    const selected = await vscode.window.showQuickPick(found.results.map(u => ({ label: `${u.name} · ${u.kind}`, description: `${u.file}:${u.startLine} · ${u.score}/100 heuristic`, detail: `Effort: ${u.effort.level} · ${u.reasons.slice(0, 2).join('; ')}`, unit: u })), { placeHolder: 'Select reusable code to inspect (file and line shown)', matchOnDescription: true, matchOnDetail: true });
+    const found = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft scanning reusable code' }, () => api.discover(root(), requirement, 15));
+    if (!found.results.length) { vscode.window.showInformationMessage('codeDeft: No likely reusable code found.'); return; }
+    const selected = await vscode.window.showQuickPick(found.results.map((u: ReuseUnit) => ({ label: `${u.name} · ${u.kind}`, description: `${u.file}:${u.startLine} · ${u.score}/100 heuristic`, detail: `Effort: ${u.effort.level} · ${u.reasons.slice(0, 2).join('; ')}`, unit: u })), { placeHolder: 'Select reusable code to inspect (file and line shown)', matchOnDescription: true, matchOnDetail: true });
     if (!selected) return;
     const u = selected.unit;
     const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root(), u.file))), { preview: false });
@@ -108,21 +118,46 @@ export function activate(context: vscode.ExtensionContext): void {
     const decision = await vscode.window.showQuickPick([{ label: 'Reuse', value: 'reuse' }, { label: 'Extract shared logic', value: 'extract' }, { label: 'Extend', value: 'extend' }, { label: 'Keep independent', value: 'independent' }], { placeHolder: 'Choose an approach (no changes will be applied)' });
     if (!decision) return;
     const targetFile = await vscode.window.showInputBox({ prompt: 'Optional target file path for the new feature (relative to repository)' });
-    const plan = await request('/api/reuse/decision', { repository: root(), requirement, sourceFile: u.file, targetFile: targetFile || undefined, decision: decision.value });
+    const plan = await api.decision({ repository: root(), requirement, sourceFile: u.file, targetFile: targetFile || undefined, decision: decision.value as 'reuse' | 'extract' | 'extend' | 'independent' });
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ language: 'json', content: JSON.stringify(plan, null, 2) }), { preview: false });
     if (decision.value !== 'independent') { vscode.window.showInformationMessage('codeDeft: Decision plan ready. No files changed. Automated patches for this option are not implemented yet.'); return; }
     const generate = await vscode.window.showInformationMessage('Independent selected. Generate NEW files for this feature, with preview and explicit approval?', 'Generate proposal');
     if (generate !== 'Generate proposal') return;
-    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft generating independent proposal' }, () => request<IndependentResult>('/api/reuse/independent/generate', { repository: root(), task: requirement, decision: 'independent' }));
+    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft generating independent proposal' }, () => api.generateIndependent(root(), requirement));
     await reviewIndependent(result);
-  });
+  };
+  register('codedeft.reuseDiscover', () => reuseDiscover());
 
   register('codedeft.independent', async () => {
     const task = await vscode.window.showInputBox({ prompt: 'Describe the new feature to implement independently (no changes to existing files)', ignoreFocusOut: true });
     if (!task) return;
-    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft generating independent proposal' }, () => request<IndependentResult>('/api/reuse/independent/generate', { repository: root(), task, decision: 'independent' }));
+    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft generating independent proposal' }, () => api.generateIndependent(root(), task));
     await reviewIndependent(result);
   });
+
+  // Dashboard → VS Code handoff: proposals generated in the browser are fetched by id and go through the
+  // same review and approval flow. Also reachable via vscode://codedeft-local.codedeft-vscode/proposal?id=…
+  const openProposal = async (id: string) => {
+    const stored = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft loading proposal' }, () => api.proposal(id.trim()));
+    const workspace = fs.realpathSync(root());
+    if (stored.repository !== workspace) {
+      const go = await vscode.window.showWarningMessage(`This proposal was generated for ${stored.repository}, but the open folder is ${workspace}. Files would be created in the open folder.`, { modal: true }, 'Review Anyway');
+      if (go !== 'Review Anyway') return;
+    }
+    await reviewIndependent(stored.result);
+  };
+  register('codedeft.openProposal', async () => {
+    const id = await vscode.window.showInputBox({ prompt: 'Proposal ID from the codeDeft dashboard', placeHolder: 'p_…', ignoreFocusOut: true, validateInput: v => /^p_[a-f0-9-]{36}$/.test(v.trim()) ? undefined : 'Expected an ID like p_1234abcd-…' });
+    if (id) await openProposal(id);
+  });
+  context.subscriptions.push(vscode.window.registerUriHandler({
+    handleUri: uri => guard(async () => {
+      if (uri.path !== '/proposal') throw new Error(`Unknown codeDeft link: ${uri.path}`);
+      const id = new URLSearchParams(uri.query).get('id') ?? '';
+      if (!/^p_[a-f0-9-]{36}$/.test(id)) throw new Error('The link does not contain a valid proposal ID');
+      await openProposal(id);
+    })
+  }));
 
   register('codedeft.figmaConnect', async () => {
     const pat = await vscode.window.showInputBox({ prompt: 'Figma personal access token (stored securely in VS Code SecretStorage)', password: true, ignoreFocusOut: true });
@@ -138,7 +173,7 @@ export function activate(context: vscode.ExtensionContext): void {
       'Validate in a temporary copy of the repository? This installs dependencies (with --ignore-scripts) and runs the repository\'s own typecheck, lint, test and build scripts, which can execute arbitrary code. Only continue for repositories you trust. Your working copy is not modified.',
       { modal: true }, 'Install and Run Checks');
     if (choice !== 'Install and Run Checks') return;
-    const validation = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft validating in a temporary copy' }, () => request('/api/figma/validate', { repository: root(), proposal, install: true }));
+    const validation = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft validating in a temporary copy' }, () => api.figmaValidate({ repository: root(), proposal: proposal as GeneratedProposal['proposal'], install: true }));
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ language: 'json', content: JSON.stringify(validation, null, 2) }));
   };
 
@@ -162,8 +197,8 @@ export function activate(context: vscode.ExtensionContext): void {
     if (Buffer.byteLength(JSON.stringify(design)) > MAX_DESIGN_UPLOAD_BYTES) throw new Error('This design is too large to send to the codeDeft server. Select a single frame in Figma and use "Copy link to selection" so the URL includes node-id.');
     const action = await vscode.window.showInformationMessage(`Extracted ${design.nodeCount} Figma design nodes. Send to codeDeft engine?`, 'Analyze', 'Generate Proposal');
     if (!action) return;
-    const endpoint = action === 'Analyze' ? '/api/figma/plan' : '/api/figma/generate';
-    const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft analyzing design' }, () => request<IndependentResult>(endpoint, { repository: root(), design }));
+    // The design is sent inline (the PAT never leaves VS Code), which every server version accepts.
+    const result: IndependentResult = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft analyzing design' }, () => action === 'Analyze' ? api.figmaPlan({ repository: root(), design }) : api.figmaGenerate({ repository: root(), design }));
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ language: 'json', content: JSON.stringify(result, null, 2) }));
     if (action === 'Generate Proposal' && result.proposal) {
       // Validate before approval: once the files exist, independent mode (correctly) refuses the same proposal.
@@ -175,16 +210,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Lightweight chat entry point until the full chat sidebar is available.
   register('codedeft.chat', async () => {
-    const message = await vscode.window.showInputBox({ prompt: 'Ask codeDeft or type figma to import a design', placeHolder: 'figma | connect to figma | Figma frame URL | repository question' });
+    const message = await vscode.window.showInputBox({ prompt: 'Ask codeDeft, ask for reusable code, or paste a Figma link', placeHolder: 'figma | Figma frame URL | find reusable … | repository question' });
     if (!message) return;
-    const trimmed = message.trim();
-    if (/^(figma|connect(?:\s+to)?\s+figma|read\s+figma)$/i.test(trimmed)) return readFigmaWorkflow();
-    if (/^https:\/\/(?:www\.)?figma\.com\//i.test(trimmed)) return readFigmaWorkflow(trimmed);
-    const result = await request<{ hits?: Hit[] }>('/api/search', { repository: root(), query: trimmed });
-    output.clear(); output.appendLine(`codeDeft · ${trimmed}\n`);
-    for (const hit of result.hits ?? []) output.appendLine(`${hit.file} (score ${hit.score}) — ${(hit.reasons ?? []).join(', ')}`);
-    if (!result.hits?.length) output.appendLine('No matching files.');
-    output.show(true);
+    // Same router as the web dashboard, so both clients interpret a message identically.
+    const route = routeChatMessage(message);
+    if (route.intent === 'empty') return;
+    if (route.intent === 'figma') return readFigmaWorkflow(route.figmaUrl);
+    if (route.intent === 'reuse') return reuseDiscover(route.query);
+    await askRepository(route.query);
   });
 
   register('codedeft.dashboard', async () => {

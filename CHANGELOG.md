@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.10.0 — unified web dashboard, production hardening
+
+**Web dashboard** (Reuse Intelligence, Figma-to-Code and Chat, ported onto 0.9 with every 0.9 fix intact)
+- Split into one component per view with a shared workspace context; views stay mounted after first visit, so inputs and running work survive tab switches.
+- Each panel has an error boundary; requests run through a "latest wins" task hook (cancellable, stale responses can never overwrite newer ones).
+- Chat uses a deterministic, tested intent router: a Figma link anywhere in a message is extracted exactly; "existing", "extract" and similar words no longer hijack searches; errors are shown in the conversation.
+- Figma designs are referenced by `designId`; JSON views do no work until opened, load lazily, and truncate very large values with a download.
+- Proposals are shown file by file (path, size, lines, code, copy) with an **Open in VS Code** handoff, and are cleared whenever the requirement, candidate or decision changes.
+- Every input has an associated label; navigation uses `aria-current`; status and errors are announced; focus is visible; motion respects reduced-motion settings.
+- Token handling text matches behaviour (cleared after success, kept after failure, never stored or logged).
+
+**Compatibility between server, extension and dashboard**
+- New shared `packages/protocol`: wire types, API version and capability negotiation, a resilient HTTP client (timeouts, cancellation, typed `ApiError` codes, response normalisation) and the chat router, used by both clients.
+- `/api/health` reports `api.version`, `api.minClient` and `capabilities`; errors carry a stable `code`. API-1 (0.7–0.9) servers and clients keep working: missing features are switched off with an explanation instead of failing.
+
+**Server**
+- `POST /api/figma/read`, `GET /api/figma/designs/:id`, `GET /api/proposals/:id`; plan/generate accept `designId` or an inline `design`.
+- Bounded LRU stores (entries, bytes, sliding TTL; content-addressed design ids, random proposal ids) keep memory use predictable.
+- Figma API errors map to `upstream_error`/`timeout` without ever including the token; `CODEDEFT_FIGMA_API_BASE` for proxies and tests; favicon requests no longer 404.
+
+**VS Code extension**
+- Uses the shared client and router; shows "update the server/extension" messages instead of failing on version mismatches, and an **Open Settings** shortcut when the server is unreachable.
+- `vscode://codedeft-local.codedeft-vscode/proposal?id=…` handler and **codeDeft: Open Proposal by ID**, with a warning when the proposal was generated for another folder.
+- Cross-platform esbuild bundle script embeds the extension version.
+
+**Tooling**
+- `npm start` pre-flight: refuses to start with missing builds, warns about builds older than their source.
+- Tests: 96 across protocol, server (API-2 end-to-end with fake Figma and model servers), stores, engine, Figma reader, extension and dashboard (vitest + jsdom), plus a manual headless-Chrome pass.
+
 ## 0.9.0 — review fixes
 
 **Correctness and safety**
