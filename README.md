@@ -5,6 +5,8 @@
 
 ![codeDeft Hybrid Architecture](./assets/codedeft-architecture.png)
 
+A local-first proof of concept combining the existing v0.5 TypeScript/SQLite repository intelligence engine with a web dashboard and a VS Code extension. The dashboard shows repository metrics, detected conventions, search evidence and import edges. The VS Code extension indexes the current folder, asks repository questions, and opens matching files.
+
 ## What's new in v0.7
 
 - **Alias-aware dependency graph.** Imports such as `@/components/BaseInput.vue` now resolve. Aliases are read from `tsconfig.json`/`tsconfig.app.json`/`jsconfig.json` `paths` (following `extends`) and from `vite.config.*` (parsed, never executed). Projects with no alias config get the Vite default `@/ -> src/`. `index.vue` folders, `./file.js` → `file.ts`, and `?raw` suffixes are handled. The detected aliases appear in the repository profile as `importAliases`. **Reindex existing repositories** to rebuild their graphs.
@@ -30,12 +32,6 @@ npm start
 Open **http://127.0.0.1:4317** in your browser. Enter the absolute path of a repository (for example `/Users/tushar/Documents/code-deft-source`) and click **Index repository**. Then use **Code Intelligence** to search and **Dependency Graph** to inspect imports.
 
 The database is saved in `data/codedeft.db` and ignored by Git.
-
-If you already indexed the same repository in your previous engine, you can reuse its database:
-
-```bash
-CODEDEFT_DB="/Users/tushar/Downloads/codedeft-engine 2/data/codedeft.db" npm start
-```
 
 ## Run the VS Code extension
 
