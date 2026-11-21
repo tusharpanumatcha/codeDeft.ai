@@ -1,62 +1,58 @@
-
-## 🏗️ codeDeft Architecture
+# codeDeft · v0.9
 
 **Understand First. Code Better.**
 
 ![codeDeft Hybrid Architecture](./assets/codedeft-architecture.png)
 
-A local-first proof of concept combining the existing v0.5 TypeScript/SQLite repository intelligence engine with a web dashboard and a VS Code extension. The dashboard shows repository metrics, detected conventions, search evidence and import edges. The VS Code extension indexes the current folder, asks repository questions, and opens matching files.
-
-## What's new in v0.7
-
-- **Alias-aware dependency graph.** Imports such as `@/components/BaseInput.vue` now resolve. Aliases are read from `tsconfig.json`/`tsconfig.app.json`/`jsconfig.json` `paths` (following `extends`) and from `vite.config.*` (parsed, never executed). Projects with no alias config get the Vite default `@/ -> src/`. `index.vue` folders, `./file.js` → `file.ts`, and `?raw` suffixes are handled. The detected aliases appear in the repository profile as `importAliases`. **Reindex existing repositories** to rebuild their graphs.
-- **Evaluation engine (`evaluation.ts`).** `codedeft compare` computes CodeSim between two files; `codedeft evaluate` computes duplication and the reusability score R for a proposal. See [Evaluation](#evaluation).
-- **Local API hardening.** The server rejects requests whose `Host` is not `127.0.0.1:<port>`/`localhost:<port>` (DNS rebinding), rejects foreign `Origin`s, requires `application/json` for POSTs (blocks cross-site "simple" requests), and sends a Content-Security-Policy. The dashboard now works with `CODEDEFT_TOKEN`.
-- **Validation no longer leaks secrets.** Repository scripts run with an allow-listed environment (PATH, HOME, temp, locale, proxy and Node toolchain variables), so `CODEDEFT_API_KEY` and other tokens are not visible to them. Proposals may not write `.env.*`, `.npmrc` or `.yarnrc*`.
-- **One ranking function.** The CLI `context`/`db-context` commands now use the same retrieval as the server, VS Code extension and agent plans. Two-letter terms such as `db`, `ui` and `id` are searchable.
+A local-first repository intelligence tool: a TypeScript/SQLite engine, a local API server with a React dashboard, and a VS Code extension. It indexes a repository, answers questions with cited files, shows the import graph, finds reusable code, imports Figma designs, and generates **new-file-only** proposals that you review and approve before anything is written.
 
 ## Requirements
 
-- Node.js 22.13+ (Node's `node:sqlite` is experimental on Node 22)
+- Node.js **22.13+** (Node 24 LTS recommended). `node:sqlite` is used; `npm start` hides its experimental-feature notice.
 - npm
-- VS Code 1.90+ (for the extension)
+- VS Code 1.90+ for the extension
 
-## Run the web dashboard
+## Build and run
 
 ```bash
-# from the extracted codedeft-hybrid folder
-npm run build:engine
-npm start
+npm run build        # engine, Figma reader, server, VS Code extension, dashboard
+npm start            # http://127.0.0.1:4317
 ```
 
-Open **http://127.0.0.1:4317** in your browser. Enter the absolute path of a repository and click **Index repository**. Then use **Code Intelligence** to search and **Dependency Graph** to inspect imports.
+The server locates its files relative to itself, so `npm start` from the root, `npm --prefix apps/server start` and `node apps/server/dist/index.js` from any directory all work. If the dashboard has not been built, `/` returns a 503 explaining how to build it; the API still works.
 
-The database is saved in `data/codedeft.db` and ignored by Git.
+Open **http://127.0.0.1:4317**, enter the absolute path of a repository and click **Index repository**. The database is stored in `data/codedeft.db` (git-ignored; override with `CODEDEFT_DB`).
 
-## Run the VS Code extension
+### VS Code extension
 
-1. Open the `apps/vscode-extension` folder in VS Code.
-2. Press **F5** to launch an Extension Development Host. If prompted to select a debugger, choose **Extension Development Host**. The folder includes `.vscode/launch.json`.
-3. In the development host, open the repository you want to analyze.
-4. Ensure the codeDeft server is running (`npm start` from the project root).
-5. Open the Command Palette and run **codeDeft: Index Repository**, then **codeDeft: Ask Repository**.
-6. Select a retrieved result to open it in the editor, or run **codeDeft: Open Dashboard**.
+1. Open `apps/vscode-extension` in VS Code and press **F5** (the folder includes `.vscode/launch.json`).
+2. In the Extension Development Host, open the repository to analyze and make sure the server is running.
+3. Run **codeDeft: Index Repository**, then **codeDeft: Ask Repository**, **Discover Reusable Code**, **Generate Independent Feature (Review First)** or **Chat (Figma or Repository)**.
 
-The extension uses `http://127.0.0.1:4317` by default; change `codedeft.serverUrl` if needed.
+The extension is bundled with esbuild into a single `dist/extension.js` (the Figma reader and path guard are compiled in), so `vsce package` produces a working package. It uses `http://127.0.0.1:4317` by default (`codedeft.serverUrl`).
+
+## Configuration
+
+| Variable | Purpose |
+|---|---|
+| `CODEDEFT_PORT` | Server port (default 4317) |
+| `CODEDEFT_DB` | SQLite database path |
+| `CODEDEFT_TOKEN` | Optional local API token; the dashboard receives it automatically, the extension needs it in `codedeft.apiToken` |
+| `CODEDEFT_ENDPOINT`, `CODEDEFT_MODEL`, `CODEDEFT_API_KEY` | OpenAI-compatible chat-completions endpoint for generation |
+| `CODEDEFT_MODEL_TIMEOUT_MS` | Model timeout (default 180000) |
+| `CODEDEFT_JSON_MODE` | Set to `0` to stop sending `response_format: json_object` (it is also dropped automatically if the endpoint answers HTTP 400) |
 
 ## API
 
-- `GET /api/health`
-- `POST /api/index` `{ "repository": "/absolute/path" }`
-- `GET /api/info?repository=/absolute/path`
-- `POST /api/search` `{ "repository": "/absolute/path", "query": "authentication" }`
-- `GET /api/graph?repository=/absolute/path&filter=auth`
+- `GET /api/health` → `{ ok, version }`
+- `POST /api/index` `{ repository }`
+- `GET /api/info?repository=…`
+- `POST /api/search` `{ repository, query, limit? }`
+- `GET /api/graph?repository=…&filter=…`
+- `POST /api/reuse/discover`, `POST /api/reuse/decision`, `POST /api/reuse/independent/generate` — see [REUSE_INTELLIGENCE.md](REUSE_INTELLIGENCE.md) and [INDEPENDENT_REUSE.md](INDEPENDENT_REUSE.md)
+- `POST /api/figma/plan`, `/api/figma/generate`, `/api/figma/validate` — see [FIGMA_WORKFLOW.md](FIGMA_WORKFLOW.md)
 
-Example:
-
-```bash
-curl -s http://127.0.0.1:4317/api/health
-```
+Request bodies are limited to 4 MB (HTTP 413 beyond that). Generation endpoints use the stored SQLite index when the repository has been indexed, otherwise they index it in memory.
 
 ## Evaluation
 
@@ -101,18 +97,18 @@ Reference results on sample login pages: identical files 1.00, same logic with r
 ## Tests
 
 ```bash
-npm run build:engine
-npm run test:all     # root tests (retrieval, server security) + engine tests
+npm run build
+npm run test:all   # server (security, UTF-8, start-up), generation, engine, Figma reader, reuse scan, VS Code extension
 ```
+
+## Security model
+
+- The server binds to `127.0.0.1` only. Requests with a foreign `Host` (DNS rebinding) or `Origin`, and POSTs that are not `application/json`, are refused, so websites in your browser cannot use the API. `CODEDEFT_TOKEN` adds defence against other local programs and is compared in constant time.
+- The server never writes into your repository. Generated code is returned as a proposal; the VS Code extension's **Approve and Create** dialog is the only way files are created, and it only creates new files (never overwrites).
+- **One path rule** (`packages/engine/src/safe-path.ts`) is used by the server, the extension and CLI validation. Proposed paths must be relative, must not contain `..`, `node_modules` or any segment starting with `.` (blocking `.git`, `.vscode`, `.github`, `.husky`, `.env*`, `.npmrc` and similar), and are compared case-insensitively because macOS and Windows file systems are case-insensitive. Symlinked targets and parent directories are refused.
+- Validation runs in a temporary copy. Running checks requires an explicit opt-in because it installs dependencies and runs the repository's own scripts, which can execute arbitrary code. Scripts get an allow-listed environment without API keys.
+- Repository excerpts and Figma text are sent to the model you configure. Review them for secrets before using an external model. Do not expose the server to other users or networks.
 
 ## Scope and limitations
 
-This is a **functional first vertical slice**, not the entire roadmap. The UI has repository indexing, basic lexical retrieval, evidence excerpts and a dependency list; the extension uses native VS Code commands rather than a chat sidebar. The engine is the original v0.5 source with a small stop-word/authentication normalization improvement. Semantic embeddings, FTS5, project boundary detection, graph canvas, LLM-powered edits, agent session history, auto-fix, the full RAS score and the refinement loop are **not implemented** yet. Search still re-reads stored file contents on every query, so very large repositories will be slow until FTS5 is added. The existing engine's CLI and validation modules remain available. For accurate results, index each application folder separately rather than a parent folder containing multiple projects.
-
-### Security
-
-The server binds to `127.0.0.1` only and does not run arbitrary commands or write source files. It can index any local directory path the user submits, so do not expose it to other users or networks. Requests with a foreign `Host` or `Origin`, and POSTs that are not `application/json`, are refused, which blocks websites in your browser from using the API. Optionally set `CODEDEFT_TOKEN` as defence in depth against other local programs; the dashboard receives it automatically and the VS Code extension needs the same value in `codedeft.apiToken`. Keep the server local. Do not commit database files, secrets or `.env` files.
-
-## Figma URL-first import
-
-In the VS Code Command Palette run **codeDeft: Chat (Figma or Repository)** and enter `figma` or paste a Figma frame URL. The workflow asks for the URL first, connects with a securely stored PAT only if needed, retrieves and normalizes the selected design, then offers **Analyze** or **Generate Proposal** using the existing engine. See [FIGMA_WORKFLOW.md](FIGMA_WORKFLOW.md).
+Retrieval is lexical and structural (no embeddings or FTS5 yet); reuse discovery is heuristic; reuse/extract/extend produce plans, not patches; visual fidelity of Figma output is not measured. Index each application folder separately rather than a parent folder containing several projects. See [CHANGELOG.md](CHANGELOG.md) for what changed in this release.

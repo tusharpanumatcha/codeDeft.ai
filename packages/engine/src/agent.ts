@@ -15,11 +15,12 @@ export type AgentPlan = {
 };
 
 /** Creates a bounded, evidence-linked coding prompt. Does not execute repository code. */
-export function createAgentPlan(index: RepositoryIndex, task: string, options: { maxFiles?: number; maxCharsPerFile?: number } = {}): AgentPlan {
+export function createAgentPlan(index: RepositoryIndex, task: string, options: { maxFiles?: number; maxCharsPerFile?: number; /** Text used to pick repository files; defaults to the task. */ retrievalQuery?: string } = {}): AgentPlan {
   if (!task.trim()) throw new Error('Task must not be empty');
   const maxFiles = Math.max(1, Math.min(12, options.maxFiles ?? 6));
   const maxChars = Math.max(200, Math.min(12_000, options.maxCharsPerFile ?? 4000));
-  const context = buildAgentContext(index, task, maxFiles);
+  const context = buildAgentContext(index, options.retrievalQuery?.trim() || task, maxFiles);
+  context.task = task;
   const profile = analyzeRepository(index);
   const relevantFiles = context.evidence.map(hit => {
     const original = index.files.find(f => f.path === hit.file);
@@ -57,24 +58,32 @@ export function createAgentPlan(index: RepositoryIndex, task: string, options: {
 
 export type ModelResponse = { content: string; model: string; usage?: unknown };
 /** OpenAI-compatible chat completion. Explicitly opt-in by invoking this function. */
-export async function generateWithModel(plan: AgentPlan, config: {
-  endpoint: string; apiKey: string; model: string; timeoutMs?: number;
-}): Promise<ModelResponse> {
+export type ModelConfig = {
+  endpoint: string; apiKey: string; model: string;
+  /** Default 60 s; proposals of many files usually need longer (the server uses CODEDEFT_MODEL_TIMEOUT_MS, default 180 s). */
+  timeoutMs?: number;
+  /** Ask for a JSON object via `response_format`. If the endpoint rejects that with HTTP 400, the request is retried once without it. */
+  jsonMode?: boolean;
+};
+export async function generateWithModel(plan: AgentPlan, config: ModelConfig): Promise<ModelResponse> {
   const url = new URL(config.endpoint);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost','127.0.0.1','[::1]'].includes(url.hostname))) {
     throw new Error('Model endpoint must use HTTPS, except for local loopback endpoints');
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? 60_000);
+  const timeoutMs = config.timeoutMs ?? 60_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const send = (jsonMode: boolean) => fetch(url, {
+    method: 'POST', signal: controller.signal,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
+    body: JSON.stringify({ model: config.model, temperature: 0.1, ...(jsonMode ? { response_format: { type: 'json_object' } } : {}), messages: [
+      { role: 'system', content: plan.systemPrompt },
+      { role: 'user', content: plan.userPrompt }
+    ] })
+  });
   try {
-    const response = await fetch(url, {
-      method: 'POST', signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
-      body: JSON.stringify({ model: config.model, temperature: 0.1, messages: [
-        { role: 'system', content: plan.systemPrompt },
-        { role: 'user', content: plan.userPrompt }
-      ] })
-    });
+    let response = await send(!!config.jsonMode);
+    if (config.jsonMode && response.status === 400) response = await send(false);
     if (!response.ok) throw new Error(`Model request failed (HTTP ${response.status})`);
     const result: unknown = await response.json();
     if (!result || typeof result !== 'object' || !('choices' in result)) throw new Error('Unexpected model response');
@@ -82,5 +91,8 @@ export async function generateWithModel(plan: AgentPlan, config: {
     const content = payload.choices?.[0]?.message?.content;
     if (typeof content !== 'string') throw new Error('Model response has no text content');
     return { content, model: payload.model ?? config.model, usage: payload.usage };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`Model request timed out after ${Math.round(timeoutMs / 1000)} s; raise CODEDEFT_MODEL_TIMEOUT_MS or request fewer files`);
+    throw error;
   } finally { clearTimeout(timeout); }
 }

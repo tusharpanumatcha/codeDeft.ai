@@ -1,10 +1,10 @@
-# codeDeft Engine v0.2.0
+# codeDeft Engine v0.9.0
 
-Standalone Node.js + TypeScript repository intelligence prototype. No UI, model API keys, or network calls.
+Standalone Node.js + TypeScript repository intelligence prototype. No UI. The only network call is the opt-in `generateWithModel`.
 
 ## Install
 
-Requires Node.js 22+ and npm.
+Requires Node.js 22.13+ and npm.
 
 ```bash
 npm install

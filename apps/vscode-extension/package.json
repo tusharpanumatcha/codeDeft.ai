@@ -2,7 +2,7 @@
   "name": "codedeft-vscode",
   "displayName": "codeDeft",
   "description": "Repository-aware code intelligence powered by a local codeDeft engine",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "publisher": "codedeft-local",
   "private": true,
   "engines": {
@@ -10,15 +10,6 @@
   },
   "categories": [
     "Other"
-  ],
-  "activationEvents": [
-    "onCommand:codedeft.ask",
-    "onCommand:codedeft.index",
-    "onCommand:codedeft.dashboard",
-    "onCommand:codedeft.figmaConnect",
-    "onCommand:codedeft.figmaRead",
-    "onCommand:codedeft.figmaDisconnect",
-    "onCommand:codedeft.chat"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -50,6 +41,14 @@
       {
         "command": "codedeft.figmaDisconnect",
         "title": "codeDeft: Disconnect Figma"
+      },
+      {
+        "command": "codedeft.independent",
+        "title": "codeDeft: Generate Independent Feature (Review First)"
+      },
+      {
+        "command": "codedeft.reuseDiscover",
+        "title": "codeDeft: Discover Reusable Code"
       }
     ],
     "configuration": {
@@ -63,17 +62,20 @@
         "codedeft.apiToken": {
           "type": "string",
           "default": "",
-          "description": "Optional local API token; prefer environment/secret storage for sensitive credentials"
+          "description": "Optional local API token (must match CODEDEFT_TOKEN on the server)"
         }
       }
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
+    "build": "npm run typecheck && npm run bundle"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
     "@types/node": "^22.0.0",
-    "@types/vscode": "^1.90.0"
+    "@types/vscode": "~1.90.0",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.7.3"
   }
 }

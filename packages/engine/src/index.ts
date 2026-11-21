@@ -90,12 +90,13 @@ export { analyzeRepository, createContextBundle, saveProfile, parseTypeScriptDia
 export type { RepositoryProfile, ContextBundle, Convention, Framework } from './intelligence.js';
 
 export { createAgentPlan, generateWithModel } from './agent.js';
-export type { AgentPlan, ModelResponse } from './agent.js';
+export type { AgentPlan, ModelResponse, ModelConfig } from './agent.js';
 
 export { RepositoryStore } from './storage.js';
 export { validateProposal, scriptEnvironment } from './validation.js';
 export type { Proposal, ValidationReport, CheckResult } from './validation.js';
 export { loadResolverConfig, resolveImport } from './resolve.js';
+export { proposalPathProblem, assertSafeProposalPath, resolveProposalTarget, proposalPathKey, MAX_PROPOSAL_PATH_LENGTH } from './safe-path.js';
 export type { PathAlias, ResolverConfig } from './resolve.js';
 export type { DatabaseStats } from './storage.js';
 
