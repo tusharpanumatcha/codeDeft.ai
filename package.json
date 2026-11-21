@@ -1,0 +1,23 @@
+{
+  "name": "@codedeft/engine",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "cli": "node dist/cli.js"
+  },
+  "dependencies": {
+    "typescript": "^5.7.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0"
+  },
+  "bin": {
+    "codedeft": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
