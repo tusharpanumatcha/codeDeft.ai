@@ -29,7 +29,7 @@ npm run build:engine
 npm start
 ```
 
-Open **http://127.0.0.1:4317** in your browser. Enter the absolute path of a repository (for example `/Users/tushar/Documents/code-deft-source`) and click **Index repository**. Then use **Code Intelligence** to search and **Dependency Graph** to inspect imports.
+Open **http://127.0.0.1:4317** in your browser. Enter the absolute path of a repository and click **Index repository**. Then use **Code Intelligence** to search and **Dependency Graph** to inspect imports.
 
 The database is saved in `data/codedeft.db` and ignored by Git.
 
