@@ -1,10 +1,11 @@
 import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadResolverConfig, resolveImport, type ResolverConfig } from './resolve.js';
 
 export type SymbolRecord = { name: string; kind: string; file: string; line: number; exported: boolean };
 export type FileRecord = { path: string; imports: string[]; symbols: SymbolRecord[]; content: string };
-export type RepositoryIndex = { root: string; files: FileRecord[]; edges: {from:string;to:string}[]; indexedAt: string };
+export type RepositoryIndex = { root: string; files: FileRecord[]; edges: {from:string;to:string}[]; indexedAt: string; resolver?: ResolverConfig };
 export type ContextHit = { file: string; score: number; reasons: string[]; symbols: SymbolRecord[]; excerpt: string };
 const extensions = new Set(['.ts','.tsx','.js','.jsx','.vue','.mts','.cts']);
 const ignored = new Set(['node_modules','.git','dist','build','.next','coverage','.nuxt','.output']);
@@ -18,7 +19,8 @@ function walk(dir:string,root:string,out:string[]):void {
     else if(ent.isFile() && extensions.has(path.extname(ent.name)) && fs.statSync(full).size<=maxFileBytes) out.push(path.relative(root,full).split(path.sep).join('/'));
   }
 }
-function parseFile(file:string,content:string):FileRecord {
+/** Parses one source file into imports and symbols (Vue: <script> blocks only). */
+export function parseFile(file:string,content:string):FileRecord {
   const isVue=file.endsWith('.vue');
   const blocks=isVue?[...content.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]):[content];
   const imports:string[]=[]; const symbols:SymbolRecord[]=[];
@@ -47,28 +49,34 @@ function parseFile(file:string,content:string):FileRecord {
   if(isVue) symbols.push({name:path.basename(file,'.vue'),kind:'vue-component',file,line:1,exported:true});
   return {path:file,imports:[...new Set(imports)],symbols,content};
 }
-function resolveImport(from:string,spec:string,files:Set<string>):string|undefined {
-  if(!spec.startsWith('.'))return undefined;
-  const base=path.posix.normalize(path.posix.join(path.posix.dirname(from),spec));
-  const candidates=[base,...['.ts','.tsx','.js','.jsx','.vue','.mts','.cts'].map(x=>base+x),...['/index.ts','/index.tsx','/index.js'].map(x=>base+x)];
-  return candidates.find(x=>files.has(x));
-}
 export function indexRepository(root:string):RepositoryIndex {
   const absolute=fs.realpathSync(root);if(!fs.statSync(absolute).isDirectory())throw new Error('Repository path must be a directory');
   const names:string[]=[];walk(absolute,absolute,names);names.sort();
   const files=names.map(name=>parseFile(name,fs.readFileSync(path.join(absolute,name),'utf8')));
   const available=new Set(names);
-  const edges=files.flatMap(f=>f.imports.map(spec=>({from:f.path,to:resolveImport(f.path,spec,available)})).filter((x):x is {from:string;to:string}=>!!x.to));
-  return {root:absolute,files,edges,indexedAt:new Date().toISOString()};
+  const resolver=loadResolverConfig(absolute);
+  const seen=new Set<string>();
+  const edges=files.flatMap(f=>f.imports.map(spec=>({from:f.path,to:resolveImport(f.path,spec,available,resolver)})).filter((x):x is {from:string;to:string}=>!!x.to&&x.to!==x.from))
+    .filter(e=>{const key=e.from+'\0'+e.to;if(seen.has(key))return false;seen.add(key);return true;});
+  return {root:absolute,files,edges,indexedAt:new Date().toISOString(),resolver};
 }
-function tokens(value:string):Set<string>{return new Set((value.replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().match(/[a-z][a-z0-9]{2,}/g)||[]).filter(t=>!['the','and','for','with','from','this','that','const','function','import','export'].includes(t)));}
+const STOP_WORDS=new Set(['the','and','for','with','from','this','that','const','function','import','export','how','what','where','when','why','does','are','is','implemented','implementation','please','show','find','code','using','used','works','work','repository',
+  'an','as','at','be','by','do','if','in','it','me','my','no','of','on','or','so','to','up','we','us','am','can','all','its','our','not','was','has','have','which','who','into','will','should','would','there','here','about','get','set']);
+function normalizeTerm(t:string):string{return t.startsWith('authenticat')||t==='auth'?'auth':t.startsWith('authoriz')?'permission':t;}
+/** Splits camelCase/snake_case text into lowercase search terms of two or more characters, without stop words. */
+export function tokens(value:string):Set<string>{
+  const words=value.replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g,'$1 $2').toLowerCase().match(/[a-z][a-z0-9]+/g)||[];
+  return new Set(words.map(normalizeTerm).filter(t=>!STOP_WORDS.has(t)));
+}
 export function queryRepository(index:RepositoryIndex,query:string,limit=8):ContextHit[]{
   const terms=tokens(query);if(!terms.size)return [];
+  const degree=new Map<string,number>();
+  for(const e of index.edges){degree.set(e.from,(degree.get(e.from)??0)+1);degree.set(e.to,(degree.get(e.to)??0)+1);}
   return index.files.map(file=>{
     const filename=tokens(file.path);const names=tokens(file.symbols.map(s=>s.name).join(' '));const content=tokens(file.content.slice(0,100_000));
     let score=0;const reasons:string[]=[];
     for(const term of terms){if(filename.has(term)){score+=5;reasons.push(`path:${term}`);}if(names.has(term)){score+=4;reasons.push(`symbol:${term}`);}if(content.has(term)){score+=1;reasons.push(`content:${term}`);}}
-    const neighbors=index.edges.filter(e=>e.from===file.path||e.to===file.path).length;
+    const neighbors=degree.get(file.path)??0;
     if(score>0)score+=Math.min(neighbors,5)*0.2;
     return {file:file.path,score:Math.round(score*10)/10,reasons,symbols:file.symbols,excerpt:file.content.slice(0,1800)};
   }).filter(h=>h.score>0).sort((a,b)=>b.score-a.score||a.file.localeCompare(b.file)).slice(0,Math.max(0,limit));
@@ -85,4 +93,11 @@ export { createAgentPlan, generateWithModel } from './agent.js';
 export type { AgentPlan, ModelResponse } from './agent.js';
 
 export { RepositoryStore } from './storage.js';
+export { validateProposal, scriptEnvironment } from './validation.js';
+export type { Proposal, ValidationReport, CheckResult } from './validation.js';
+export { loadResolverConfig, resolveImport } from './resolve.js';
+export type { PathAlias, ResolverConfig } from './resolve.js';
 export type { DatabaseStats } from './storage.js';
+
+export { codeSim, duplicationReport, evaluateProposal, splitBlocks, normalizeTokens, tokenEditDistance, lexicalSimilarity, winnow, jaccard, containment, weightedJaccard, structuralSimilarity, fileFingerprints, DEFAULT_WEIGHTS } from './evaluation.js';
+export type { CodeSimResult, BlockSimilarity, DuplicationReport, DuplicateMatch, ProposalEvaluation, SimilarityWeights, BlockName } from './evaluation.js';

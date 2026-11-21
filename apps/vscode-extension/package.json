@@ -1,0 +1,59 @@
+{
+  "name": "codedeft-vscode",
+  "displayName": "codeDeft",
+  "description": "Repository-aware code intelligence powered by a local codeDeft engine",
+  "version": "0.8.0",
+  "publisher": "codedeft-local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:codedeft.ask",
+    "onCommand:codedeft.index",
+    "onCommand:codedeft.dashboard"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codedeft.ask",
+        "title": "codeDeft: Ask Repository"
+      },
+      {
+        "command": "codedeft.index",
+        "title": "codeDeft: Index Repository"
+      },
+      {
+        "command": "codedeft.dashboard",
+        "title": "codeDeft: Open Dashboard"
+      }
+    ],
+    "configuration": {
+      "title": "codeDeft",
+      "properties": {
+        "codedeft.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4317",
+          "description": "Local codeDeft API URL"
+        },
+        "codedeft.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional local API token; prefer environment/secret storage for sensitive credentials"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0"
+  }
+}

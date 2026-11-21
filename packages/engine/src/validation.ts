@@ -8,10 +8,28 @@ export type CheckResult = { name: string; status: 'passed'|'failed'|'skipped'; c
 export type ValidationReport = { status: 'passed'|'failed'|'incomplete'; repository: string; proposal: string; changedFiles: string[]; checks: CheckResult[]; workspace?: string; warning: string };
 const MAX_FILE_BYTES = 2_000_000;
 const MAX_OUTPUT = 12_000;
+/** Paths a proposal may never write: VCS data, installed packages, and secret files (.env, .env.local, .npmrc …). */
+function isProtectedSegment(segment: string): boolean {
+  const s = segment.toLowerCase();
+  return ['.git', 'node_modules', '.npmrc', '.yarnrc', '.yarnrc.yml', '.ssh'].includes(s) || s === '.env' || s.startsWith('.env.');
+}
+/**
+ * Environment for repository scripts. Only what npm and common toolchains need is passed through, so API keys
+ * and tokens in the parent process (e.g. CODEDEFT_API_KEY, AWS_*, GITHUB_TOKEN) are not visible to them.
+ */
+const ENV_ALLOWLIST = ['PATH', 'Path', 'PATHEXT', 'HOME', 'USERPROFILE', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM',
+  'SystemRoot', 'SYSTEMROOT', 'ComSpec', 'COMSPEC', 'WINDIR', 'APPDATA', 'LOCALAPPDATA', 'ProgramFiles', 'ProgramData',
+  'NVM_DIR', 'NVM_BIN', 'VOLTA_HOME', 'FNM_DIR', 'PNPM_HOME', 'COREPACK_HOME', 'npm_config_cache', 'NPM_CONFIG_CACHE',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE'];
+export function scriptEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ENV_ALLOWLIST) if (source[key] !== undefined) env[key] = source[key];
+  return { ...env, CI: 'true', npm_config_yes: 'false', npm_config_fund: 'false', npm_config_audit: 'false' };
+}
 function safeTarget(root: string, path: string): string {
   if (!path || isAbsolute(path) || path.includes('\\') || path.includes('\0')) throw new Error(`Unsafe proposal path: ${path}`);
   const segments = path.split('/');
-  if (segments.some(s => !s || s === '.' || s === '..') || segments.some(s => ['.git','node_modules','.env'].includes(s))) throw new Error(`Unsafe proposal path: ${path}`);
+  if (segments.some(s => !s || s === '.' || s === '..') || segments.some(isProtectedSegment)) throw new Error(`Unsafe proposal path: ${path}`);
   const target = resolve(root, path);
   if (!target.startsWith(root + sep)) throw new Error(`Proposal escapes workspace: ${path}`);
   let parent = dirname(target);
@@ -24,7 +42,7 @@ function safeTarget(root: string, path: string): string {
 }
 function run(name: string, command: string, cwd: string, timeoutMs: number): CheckResult {
   const start = Date.now();
-  const r = spawnSync(command, {cwd, shell: true, encoding:'utf8', timeout:timeoutMs, maxBuffer: 1024*1024, env:{...process.env, CI:'true', npm_config_yes:'false'}});
+  const r = spawnSync(command, {cwd, shell: true, encoding:'utf8', timeout:timeoutMs, maxBuffer: 1024*1024, env:scriptEnvironment()});
   const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.trim().slice(-MAX_OUTPUT);
   return {name, command, status:r.status===0?'passed':'failed', exitCode:r.status, output, durationMs:Date.now()-start};
 }

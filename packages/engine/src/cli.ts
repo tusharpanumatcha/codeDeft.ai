@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import { validateProposal } from './validation.js';
+import { codeSim, evaluateProposal } from './evaluation.js';
 import { RepositoryStore } from './storage.js';
 import { indexRepository, analyzeRepository, createContextBundle, saveProfile, createAgentPlan, generateWithModel } from './index.js';
 const [command,root='.',...rest]=process.argv.slice(2);
-if(!['analyze','context','agent','generate','validate','db-index','db-info','db-context','db-agent'].includes(command||'')) {
-  console.error('Usage: codedeft analyze <repo-path> [output.json] | codedeft context <repo-path> <task> | codedeft agent <repo-path> <task> | codedeft generate <repo-path> <task> | codedeft validate <repo-path> <proposal.json> [--install] [--keep-workspace] | codedeft db-index <repo-path> [--db database.sqlite] | codedeft db-info <repo-path> [--db database.sqlite] | codedeft db-context <repo-path> <task> [--db database.sqlite] | codedeft db-agent <repo-path> <task> [--db database.sqlite]');
+if(!['analyze','context','agent','generate','validate','db-index','db-info','db-context','db-agent','compare','evaluate'].includes(command||'')) {
+  console.error('Usage: codedeft analyze <repo-path> [output.json] | codedeft context <repo-path> <task> | codedeft agent <repo-path> <task> | codedeft generate <repo-path> <task> | codedeft validate <repo-path> <proposal.json> [--install] [--keep-workspace] | codedeft db-index <repo-path> [--db database.sqlite] | codedeft db-info <repo-path> [--db database.sqlite] | codedeft db-context <repo-path> <task> [--db database.sqlite] | codedeft db-agent <repo-path> <task> [--db database.sqlite] | codedeft compare <fileA> <fileB> [--concrete] [--weights a,b,g] | codedeft evaluate <repo-path> <proposal.json> [--db database.sqlite]');
   process.exitCode=1;
 } else {
   try {
@@ -24,6 +26,23 @@ if(!['analyze','context','agent','generate','validate','db-index','db-info','db-
           console.log(JSON.stringify(command==='db-agent'?createAgentPlan(index,task):createContextBundle(index,task),null,2));
         }
       } finally {store.close();}
+    } else if(command==='compare'){
+      const other=rest.find(arg=>!arg.startsWith('--'));
+      if(!other)throw new Error('Provide two files to compare');
+      const w=rest.indexOf('--weights');
+      let weights;
+      if(w>=0){const parts=(rest[w+1]??'').split(',').map(Number);if(parts.length!==3||parts.some(n=>!Number.isFinite(n)))throw new Error('--weights expects three numbers, e.g. 0.2,0.3,0.5');weights={alpha:parts[0]!,beta:parts[1]!,gamma:parts[2]!};}
+      const result=codeSim({path:root,content:fs.readFileSync(root,'utf8')},{path:other,content:fs.readFileSync(other,'utf8')},{abstractIdentifiers:!rest.includes('--concrete'),weights});
+      console.log(JSON.stringify({candidate:root,reference:other,...result},null,2));
+    } else if(command==='evaluate'){
+      const proposalPath=rest.find((arg,i)=>!arg.startsWith('--')&&rest[i-1]!=='--db');
+      if(!proposalPath)throw new Error('Provide a proposal JSON path');
+      const proposal=JSON.parse(fs.readFileSync(proposalPath,'utf8'));
+      const dbFlag=rest.indexOf('--db');
+      let index;
+      if(dbFlag>=0){const store=new RepositoryStore(rest[dbFlag+1]);try{index=store.load(root);}finally{store.close();}}
+      else index=indexRepository(root);
+      console.log(JSON.stringify(evaluateProposal(index,proposal),null,2));
     } else if(command==='validate'){
       const proposal=rest.find(arg=>!arg.startsWith('--'));
       if(!proposal)throw new Error('Provide a proposal JSON path');
