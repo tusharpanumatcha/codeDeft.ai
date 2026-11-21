@@ -1,5 +1,7 @@
 # codeDeft Universal Reuse Intelligence — MVP
 
+![A requirement is matched against code units in the repository; ranked candidates show their evidence and you choose Reuse, Extract, Extend or Keep independent, producing a review plan.](docs/images/reuse-intelligence.svg)
+
 This is a working **evidence-first discovery and decision review** workflow for Vue, TypeScript, JavaScript, Java, Python, Go, C#, Kotlin and Rust source files. It is **not** a verified semantic matcher or a fully automatic refactoring agent.
 
 ## Start

@@ -102,3 +102,5 @@ export type { DatabaseStats } from './storage.js';
 
 export { codeSim, duplicationReport, evaluateProposal, splitBlocks, normalizeTokens, tokenEditDistance, lexicalSimilarity, winnow, jaccard, containment, weightedJaccard, structuralSimilarity, fileFingerprints, DEFAULT_WEIGHTS } from './evaluation.js';
 export type { CodeSimResult, BlockSimilarity, DuplicationReport, DuplicateMatch, ProposalEvaluation, SimilarityWeights, BlockName } from './evaluation.js';
+export { verifyCode, lookupSymbol, suggestNames, editDistance, extractImports, moduleExports } from './verify.js';
+export type { VerificationReport, Finding, SymbolDefinition, ImportRef, ModuleExports, VerifyOptions } from './verify.js';

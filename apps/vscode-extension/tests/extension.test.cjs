@@ -11,11 +11,14 @@ const HEALTH_V2 = { ok: true, version: '0.10.0', api: { version: 2, minClient: 1
 const reply = (status, body) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
 
 function fakeVscode(state) {
+  class EventEmitter { constructor() { this.listeners = []; this.event = (l) => { this.listeners.push(l); return { dispose() {} }; }; } fire() { this.listeners.forEach(l => l()); } dispose() {} }
+  class McpStdioServerDefinition { constructor(label, command, args, env, version) { Object.assign(this, { label, command, args, env, version }); } }
   class FileSystemError extends Error {}
   class WorkspaceEdit { constructor() { this.ops = []; } createFile(uri, options) { this.ops.push({ uri, options }); } }
   return {
-    FileSystemError, WorkspaceEdit,
-    Uri: { file: p => ({ fsPath: p }), parse: s => s },
+    FileSystemError, WorkspaceEdit, EventEmitter,
+    ...(state.mcpApi ? { McpStdioServerDefinition, lm: { registerMcpServerDefinitionProvider: (id, provider) => { state.mcpProviders[id] = provider; return { dispose() {} }; } } } : {}),
+    Uri: { file: p => ({ fsPath: p, path: p }), parse: s => s, joinPath: (u, ...parts) => ({ fsPath: path.join(u.fsPath, ...parts), path: path.join(u.fsPath, ...parts) }) },
     ProgressLocation: { Notification: 15 }, TextEditorRevealType: {}, Range: class {}, Selection: class {}, Position: class {},
     window: {
       createOutputChannel: () => ({ clear() {}, appendLine: l => state.output.push(l), show() {}, dispose() {} }),
@@ -31,17 +34,20 @@ function fakeVscode(state) {
       workspaceFolders: [{ uri: { fsPath: state.folder } }],
       getConfiguration: () => ({ get: (_k, d) => d }),
       onDidChangeConfiguration: () => ({ dispose() {} }),
+      onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+      asRelativePath: (u) => path.relative(state.folder, u.fsPath),
+      fs: { readFile: async (u) => fs.readFileSync(u.fsPath), writeFile: async (u, b) => { fs.mkdirSync(path.dirname(u.fsPath), { recursive: true }); fs.writeFileSync(u.fsPath, b); state.written.push(u.fsPath); }, createDirectory: async (u) => fs.mkdirSync(u.fsPath, { recursive: true }) },
       openTextDocument: async () => ({}),
       applyEdit: async (edit) => { state.applied.push(edit); for (const op of edit.ops) { fs.mkdirSync(path.dirname(op.uri.fsPath), { recursive: true }); fs.writeFileSync(op.uri.fsPath, op.options.contents); } return true; }
     },
-    commands: { registerCommand: (id, fn) => { state.commands[id] = fn; return { dispose() {} }; }, executeCommand: async (...a) => { state.executed.push(a); } },
-    env: { openExternal: async () => true }
+    commands: { registerCommand: (id, fn) => { state.commands[id] = fn; return { dispose() {} }; }, executeCommand: async (id, ...a) => { state.executed.push([id, ...a]); if (state.commands[id]) return state.commands[id](...a); } },
+    env: { openExternal: async () => true, clipboard: { writeText: async (t) => { state.clipboard = t; } } }
   };
 }
 
-function setup({ routes = {}, inputs = [], approve = 'Approve and Create', folder } = {}) {
+function setup({ routes = {}, inputs = [], approve = 'Approve and Create', folder, mcpApi = false, picks = [] } = {}) {
   folder = folder ?? fs.mkdtempSync(path.join(os.tmpdir(), 'cd-ext-'));
-  const state = { folder, inputs: [...inputs], approve, warnings: [], info: [], errors: [], applied: [], commands: {}, prompts: [], output: [], executed: [], calls: [] };
+  const state = { folder, inputs: [...inputs], approve, warnings: [], info: [], errors: [], applied: [], commands: {}, prompts: [], output: [], executed: [], calls: [], mcpApi, mcpProviders: {}, written: [], picks: [...picks], pick: picks.length ? (items) => { const want = state.picks.shift(); return items.find(i => i.id === want); } : undefined };
   const original = Module._load;
   Module._load = function (request, ...rest) { return request === 'vscode' ? fakeVscode(state) : original.call(this, request, ...rest); };
   let ext;
@@ -53,7 +59,8 @@ function setup({ routes = {}, inputs = [], approve = 'Approve and Create', folde
     if (handler === 'down') throw new TypeError('fetch failed');
     return handler ? handler(state.calls.at(-1).body) : reply(404, { error: 'Unknown API endpoint' });
   };
-  ext.activate({ subscriptions: [], secrets: { get: async () => undefined, store: async () => {}, delete: async () => {} } });
+  ext.activate({ subscriptions: [], secrets: { get: async () => undefined, store: async () => {}, delete: async () => {} }, asAbsolutePath: (p) => path.join(__dirname, '..', p), extension: { packageJSON: { version: '0.12.0' } } });
+  state.ext = ext;
   return state;
 }
 const proposalBody = (changes) => ({ decision: 'independent', approvalRequired: true, proposal: { changes, rationale: 'r' }, proposalId: 'p_11111111-1111-1111-1111-111111111111' });
@@ -65,7 +72,7 @@ test('approved files are written with their full contents (no unsaved buffers)',
   assert.deepEqual(s.errors, []);
   assert.equal(fs.readFileSync(path.join(s.folder, 'src/NewLogin.vue'), 'utf8'), '<template>é</template>');
   assert.equal(s.applied[0].ops[0].options.overwrite, false);
-  assert.match(s.calls.find(c => c.path.includes('generate')).headers['x-codedeft-client'], /^vscode-extension\/0\.10\.0; api=2$/);
+  assert.match(s.calls.find(c => c.path.includes('generate')).headers['x-codedeft-client'], /^vscode-extension\/\d+\.\d+\.\d+; api=2$/);
 });
 test('cancelling approval creates nothing', async () => {
   const s = setup({ routes: generate([{ path: 'src/A.ts', content: 'x' }]), inputs: ['x'], approve: null });
@@ -129,4 +136,66 @@ test('server not running: clear message with a settings shortcut, no crash', asy
   const s = setup({ routes: { '/api/health': 'down' }, inputs: ['question'] });
   await s.commands['codedeft.ask']();
   assert.match(s.errors[0], /did not answer \/api\/health|Cannot reach/);
+});
+
+// ---- AI assistant integration (MCP) ----
+const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+
+test('registers the bundled MCP server for Copilot when VS Code supports it, and that server really starts', async () => {
+  const s = setup({ mcpApi: true });
+  const provider = s.mcpProviders['codedeft.context'];
+  assert.ok(provider, 'provider registered under the id declared in package.json');
+  const [def] = await provider.provideMcpServerDefinitions();
+  assert.equal(def.label, 'codeDeft'); assert.equal(def.command, 'node');
+  assert.match(def.args[0], /dist[\/\\]mcp[\/\\]codedeft-mcp\.mjs$/); assert.equal(def.env.CODEDEFT_REPOSITORY, s.folder); assert.equal(def.cwd.fsPath, s.folder);
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert.deepEqual(pkg.contributes.mcpServerDefinitionProviders.map(p => p.id), ['codedeft.context']);
+  fs.writeFileSync(path.join(s.folder, 'a.ts'), 'export const answer = 42;\n');
+  const client = new Client({ name: 'vscode-sim', version: '1' });
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: def.args, env: { ...process.env, ...def.env }, cwd: def.cwd.fsPath, stderr: 'pipe' }));
+  try {
+    const r = await client.callTool({ name: 'lookup_symbol', arguments: { name: 'answer' } });
+    assert.match(r.content[0].text, /a\.ts:1/);
+  } finally { await client.close(); }
+});
+test('older VS Code without the MCP API: activation still works and setup falls back to .vscode/mcp.json', async () => {
+  const s = setup({ mcpApi: false, picks: ['copilot'], approve: 'Write File' });
+  assert.deepEqual(s.mcpProviders, {});
+  await s.commands['codedeft.connectAi']();
+  assert.deepEqual(s.errors, []);
+  const written = JSON.parse(fs.readFileSync(path.join(s.folder, '.vscode/mcp.json'), 'utf8'));
+  assert.equal(written.servers.codedeft.type, 'stdio'); assert.equal(written.servers.codedeft.env.CODEDEFT_REPOSITORY, '${workspaceFolder}');
+});
+test('Copilot instructions are added once, refreshed in place, and never overwrite other instructions', () => {
+  const s = setup();
+  const { mergeInstructions, COPILOT_INSTRUCTIONS } = s.ext;
+  const mine = '# Team rules\n\nUse tabs.\n';
+  const once = mergeInstructions(mine);
+  assert.ok(once.startsWith(mine.trimEnd())); assert.ok(once.includes(COPILOT_INSTRUCTIONS));
+  assert.equal(mergeInstructions(once), once, 'idempotent');
+  const stale = once.replace('verify_code', 'old_tool');
+  assert.equal(mergeInstructions(stale), once, 'refreshes the codeDeft section only');
+  assert.match(mergeInstructions(undefined), /^# Copilot instructions/);
+});
+test('.vscode/mcp.json merge keeps other servers and refuses files with comments', () => {
+  const s = setup();
+  const merged = JSON.parse(s.ext.mergeWorkspaceMcp(JSON.stringify({ servers: { github: { type: 'http', url: 'x' } }, inputs: [] }), { type: 'stdio' }));
+  assert.deepEqual(Object.keys(merged.servers).sort(), ['codedeft', 'github']); assert.deepEqual(merged.inputs, []);
+  assert.equal(s.ext.mergeWorkspaceMcp('{ // comment\n "servers": {} }', {}), undefined);
+});
+test('other assistants: a portable MCP config is copied to the clipboard', async () => {
+  const s = setup({ picks: ['other'] });
+  await s.commands['codedeft.connectAi']();
+  assert.deepEqual(s.errors, []);
+  const cfg = JSON.parse(s.clipboard);
+  assert.equal(cfg.mcpServers.codedeft.command, 'node'); assert.equal(cfg.mcpServers.codedeft.env.CODEDEFT_REPOSITORY, s.folder);
+});
+
+test('the approval dialog warns when the proposal references things that do not exist', async () => {
+  const s = setup({ approve: null, inputs: ['x'], routes: { '/api/reuse/independent/generate': () => reply(200, { ...proposalBody([{ path: 'src/A.ts', content: 'x' }]), verification: { errors: 2, warnings: 0, attempts: 2, files: [{ path: 'src/A.ts', findings: [{ severity: 'error', message: '`dayjs` is not declared', line: 1 }] }] } }) } });
+  await s.commands['codedeft.independent']();
+  assert.match(s.warnings[0], /^2 references in this proposal do not exist/);
+  assert.ok(s.output.some(l => /Repository check: 2 references do not exist \(after 1 automatic fix round\)/.test(l)));
+  assert.ok(s.output.some(l => /ERROR src\/A\.ts:1/.test(l)));
 });

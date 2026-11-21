@@ -15,7 +15,7 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   'index', 'search', 'graph', 'info',
   'reuse.discover', 'reuse.decision', 'reuse.generate',
   'figma.plan', 'figma.generate', 'figma.validate',
-  'figma.read', 'figma.designs', 'proposals'
+  'figma.read', 'figma.designs', 'proposals', 'features'
 ];
 
 /** What an API-1 server (no capability list) is known to provide. */
@@ -30,7 +30,8 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
   'reuse.discover': 'reuse discovery', 'reuse.decision': 'reuse decision plans', 'reuse.generate': 'independent generation',
   'figma.plan': 'Figma analysis', 'figma.generate': 'Figma generation', 'figma.validate': 'proposal validation',
   'figma.read': 'reading Figma designs through the server', 'figma.designs': 'server-side design storage',
-  proposals: 'proposal handoff to VS Code'
+  proposals: 'proposal handoff to VS Code',
+  features: 'feature chats'
 };
 
 export type Compatibility = {

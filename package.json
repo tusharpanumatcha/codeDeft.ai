@@ -1,7 +1,7 @@
 {
   "name": "codedeft",
   "private": true,
-  "version": "0.10.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "build": "npm run build:engine && npm run build:protocol && npm run build:apps",
@@ -10,13 +10,15 @@
     "build:server": "npm --prefix apps/server install && npm --prefix apps/server run build",
     "build:extension": "npm --prefix apps/vscode-extension install && npm --prefix apps/vscode-extension run build",
     "build:dashboard": "npm --prefix apps/web-dashboard install && npm --prefix apps/web-dashboard run build",
-    "build:apps": "npm run build:figma && npm run build:server && npm run build:extension && npm run build:dashboard",
+    "build:apps": "npm run build:figma && npm run build:server && npm run build:mcp && npm run build:extension && npm run build:dashboard",
     "start": "node --disable-warning=ExperimentalWarning scripts/start.mjs",
     "dev:dashboard": "npm --prefix apps/web-dashboard run dev",
     "test": "node --test tests/*.test.mjs",
-    "test:all": "npm test && npm --prefix packages/protocol test && npm --prefix packages/engine test && npm --prefix packages/figma-reader test && node --test apps/server/tests/*.test.mjs && node --test apps/vscode-extension/tests/*.test.cjs && npm --prefix apps/web-dashboard test",
+    "test:all": "npm test && npm --prefix packages/protocol test && npm --prefix packages/engine test && npm --prefix packages/figma-reader test && node --test apps/server/tests/*.test.mjs && node --test apps/vscode-extension/tests/*.test.cjs && npm --prefix apps/web-dashboard test && npm --prefix apps/mcp-server test",
     "test:figma": "npm run build:figma && npm --prefix packages/figma-reader test",
-    "build:protocol": "npm --prefix packages/protocol install && npm --prefix packages/protocol run build"
+    "build:protocol": "npm --prefix packages/protocol install && npm --prefix packages/protocol run build",
+    "build:mcp": "npm --prefix apps/mcp-server install && npm --prefix apps/mcp-server run build",
+    "mcp": "node apps/mcp-server/dist/codedeft-mcp.mjs"
   },
   "engines": {
     "node": ">=22.13.0"

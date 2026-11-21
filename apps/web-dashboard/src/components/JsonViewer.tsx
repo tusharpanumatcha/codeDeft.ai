@@ -27,12 +27,12 @@ export function JsonViewer({ label, value, load }: { label: string; value?: unkn
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return (
-    <details className="json" onToggle={toggle}>
+    <details onToggle={toggle}>
       <summary>{label}</summary>
-      {open && (loaded.loading ? <p role="status">Loading…</p> : loaded.error ? <p className="error" role="alert">{loaded.error}</p> : text && <>
-        <pre className="source" tabIndex={0}>{text.length > MAX_RENDER_CHARS ? text.slice(0, MAX_RENDER_CHARS) + '\n… truncated on screen' : text}</pre>
-        <button type="button" className="secondary" onClick={download}>Download JSON ({Math.ceil(text.length / 1024).toLocaleString()} KB)</button>
-      </>)}
+      {open && (loaded.loading ? <p className="busy" role="status"><span className="spinner" aria-hidden="true" />Loading…</p> : loaded.error ? <div className="alert error" role="alert">{loaded.error}</div> : text && <div className="stack-sm">
+        <pre className="code-block wrap" tabIndex={0} aria-label={label}>{text.length > MAX_RENDER_CHARS ? text.slice(0, MAX_RENDER_CHARS) + '\n… truncated on screen' : text}</pre>
+        <div className="row"><button type="button" className="btn btn-secondary" onClick={download}>Download JSON ({Math.ceil(text.length / 1024).toLocaleString()} KB)</button></div>
+      </div>)}
     </details>
   );
 }

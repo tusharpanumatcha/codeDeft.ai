@@ -1,6 +1,7 @@
 import { indexRepository, createAgentPlan, type RepositoryIndex, type AgentPlan } from '../../../packages/engine/dist/index.js';
 import { evaluateProposal } from '../../../packages/engine/dist/evaluation.js';
-import { generateWithModel, type ModelConfig } from '../../../packages/engine/dist/agent.js';
+import { type ModelConfig } from '../../../packages/engine/dist/agent.js';
+import { generateVerified } from './grounded-generation.js';
 import { validateProposal, type ValidationReport } from '../../../packages/engine/dist/validation.js';
 import { assertSafeProposalPath, proposalPathKey } from '../../../packages/engine/dist/safe-path.js';
 import type { DesignDocument, DesignNode } from '../../../packages/figma-reader/dist/index.js';
@@ -84,13 +85,12 @@ export function parseProposal(text: string): IndependentProposal {
 export async function proposeDesign(repository: string, design: unknown, modelConfig: Partial<ModelConfig>, options: { index?: RepositoryIndex } = {}) {
   if (!modelConfig.apiKey || !modelConfig.model || !modelConfig.endpoint) throw new Error('Set CODEDEFT_API_KEY, CODEDEFT_MODEL and CODEDEFT_ENDPOINT for generation');
   const { index, plan, summary } = planFromDesign(repository, design, options);
-  const response = await generateWithModel(plan, modelConfig as ModelConfig);
-  const proposal = parseProposal(response.content);
+  const { proposal, response, verification } = await generateVerified(plan, index, modelConfig as ModelConfig);
   assertIndependentProposal(repository, proposal);
   const preview = previewIndependentProposal(repository, proposal);
   const reuse = evaluateProposal(index, proposal);
   return {
-    decision: 'independent' as const, approvalRequired: true, preview, design: summary, proposal, model: response.model,
+    decision: 'independent' as const, approvalRequired: true, preview, verification, design: summary, proposal, model: response.model,
     repositoryEvidence: plan.relevantFiles.map(f => ({ path: f.path, score: f.score, reasons: f.reasons })),
     evaluation: { reusability: reuse.reusability, files: reuse.files, limitations: reuse.limitations, visualSimilarity: null, functionalCorrectness: null, designRelevance: null },
     warning: 'Not applied. Visual and functional relevance require rendered screenshots and tests; no percentage is fabricated.'

@@ -16,7 +16,9 @@ export type Capability =
   /** Designs kept on the server and referenced by `designId`. */
   | 'figma.designs'
   /** Generated proposals kept on the server and fetched by id (dashboard → VS Code handoff). */
-  | 'proposals';
+  | 'proposals'
+  /** Feature chats: one stored conversation and context per feature (since 0.13). */
+  | 'features';
 
 export type HealthResponse = {
   ok: true;
@@ -82,3 +84,29 @@ export type FigmaReadResponse = {
   summary: DesignSummary;
   warnings: string[];
 };
+
+/* ---------------------------------------------------------------- feature chats (capability: features) */
+
+export type FeatureStatus = 'exploring' | 'deciding' | 'generating' | 'proposal_ready' | 'done' | 'failed';
+export type ReuseChoice = 'reuse' | 'reference' | 'ignore';
+export type ReuseCandidate = { id: string; name: string; kind: string; file: string; startLine: number; endLine: number; exported?: boolean; usedBy: number; score: number; excerpt: string };
+export type FeatureProposalRef = { id: string; version: number; files: string[]; ok: boolean; errors: number; createdAt: string };
+
+/** Everything known about one feature: the context panel's content. All parts are optional and fill in over time. */
+export type FeatureContext = {
+  requirement?: string;
+  design?: { designId: string; name: string; url: string; nodeId?: string; nodeCount: number; components: number; texts: string[] };
+  files?: { path: string; score: number; why: string[] }[];
+  edges?: Edge[];
+  reuse?: { query: string; candidates: ReuseCandidate[]; choices: Record<string, ReuseChoice> };
+  proposals?: FeatureProposalRef[];
+  /** When the repository evidence above was computed; compared with the repository's last index. */
+  analysedAt?: string;
+};
+
+export type FeatureSummary = { id: string; repository: string; name: string; status: FeatureStatus; archived: boolean; createdAt: string; updatedAt: string; lastMessage?: string };
+export type Feature = FeatureSummary & { requirement: string; context: FeatureContext; stale: boolean };
+
+export type FeatureMessageKind = 'text' | 'search' | 'reuse' | 'design' | 'design_request' | 'graph' | 'generating' | 'proposal' | 'error';
+export type FeatureMessage = { id: string; featureId: string; role: 'user' | 'assistant'; kind: FeatureMessageKind; text: string; payload?: Record<string, unknown>; createdAt: string; updatedAt: string };
+export type FeatureDetail = { feature: Feature; messages: FeatureMessage[] };

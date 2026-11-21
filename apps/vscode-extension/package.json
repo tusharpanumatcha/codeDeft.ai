@@ -2,8 +2,9 @@
   "name": "codedeft-vscode",
   "displayName": "codeDeft",
   "description": "Repository-aware code intelligence powered by a local codeDeft engine",
-  "version": "0.10.0",
+  "version": "1.0.0",
   "publisher": "codedeft-local",
+  "icon": "media/icon.png",
   "private": true,
   "engines": {
     "vscode": "^1.90.0"
@@ -53,6 +54,10 @@
       {
         "command": "codedeft.openProposal",
         "title": "codeDeft: Open Proposal by ID"
+      },
+      {
+        "command": "codedeft.connectAi",
+        "title": "codeDeft: Connect AI Assistants (Copilot, Claude, …)"
       }
     ],
     "configuration": {
@@ -67,9 +72,20 @@
           "type": "string",
           "default": "",
           "description": "Optional local API token (must match CODEDEFT_TOKEN on the server)"
+        },
+        "codedeft.nodePath": {
+          "type": "string",
+          "default": "node",
+          "description": "Node.js executable used to run the codeDeft MCP server for Copilot and other assistants (22.13 or newer)."
         }
       }
-    }
+    },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "codedeft.context",
+        "label": "codeDeft repository context"
+      }
+    ]
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -77,10 +93,12 @@
     "build": "npm run typecheck && npm run bundle"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^22.0.0",
     "@types/vscode": "~1.90.0",
     "esbuild": "^0.25.12",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "zod": "^4.6.7"
   },
   "activationEvents": [
     "onUri"

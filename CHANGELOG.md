@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.0.0 — first stable release
+
+Version 1.0.0 of every package (engine, protocol, figma-reader, server, MCP server, web dashboard, VS Code extension). The local API stays at API version 2, so 0.10–0.13 clients and servers keep working with 1.0.0. Includes everything below.
+
+- **Logo and icon**: code brackets around a check mark ("code, verified"), forest green. Files in `docs/brand/` (SVG with outlined text, PNG 16–1024 px, light/dark/tagline wordmarks, mono and white marks; regenerate with `python3 scripts/logo.py`). Used as the VS Code extension icon, the dashboard favicon and sidebar mark, and the README header.
+
+## 0.13.0 — feature chats (one conversation per feature, stored)
+
+- **Feature chats** replace the separate Reuse, Figma-to-code and Chat pages: each feature is its own conversation with its own context (requirement, Figma frame, reuse decisions, files and dependencies, proposals). Layout matches the approved mockup: features in the sidebar, conversation in the middle, **Feature context** panel (Summary · Design · Reuse · Files · Proposal) on the right; on 1024–1279 px the panel opens as an overlay.
+- **Stored on the server** in SQLite (the same `CODEDEFT_DB` file): features, every message, read designs (30 days, `CODEDEFT_DESIGN_RETENTION_DAYS`) and proposals (365 days, `CODEDEFT_PROPOSAL_RETENTION_DAYS`). Conversations survive reloads, restarts and switching browsers; the last open feature per repository is reopened. Search features by name or file; rename, mark done, archive with undo.
+- The server routes messages (`/reuse`, `/figma`, `/graph`, `/generate`, a Figma link anywhere in a sentence, or plain questions) and runs generation **in the background**: you can leave a feature while it generates. Generation uses the feature's reuse decisions (reuse = import, never copy) and the verified generate → check → repair loop. A generation interrupted by a restart is marked clearly; a feature analysed before the repository was re-indexed offers "Re-run matching".
+- Verifier: files created together in one proposal (or one `verify_code` call) may import each other; their exports are still checked.
+- Composer with a keyboard slash menu (combobox/listbox, ↑ ↓ Enter Esc), quick-action chips, `Ctrl K`/`⌘ K`; context tabs with arrow keys. axe-core in Chrome: 0 violations across the flow in all three themes.
+- Docs: every guide now opens with an illustration (`docs/images/*.svg`, regenerated with `python3 scripts/illustrations.py`); the README shows the dashboard.
+- New API (capability `features`): `GET/POST /api/features`, `GET/POST /api/features/:id`, `POST /api/features/:id/messages|design|reuse|generate|refresh`. Older servers keep working: the dashboard explains that feature chats need an update and the repository pages still work.
+
+## 0.12.0 — AI assistant integration (MCP) and verified generation
+
+- **MCP server** (`apps/mcp-server`, bundled to one file): read-only tools `get_task_context`, `search_code`, `lookup_symbol`, `find_reusable_code`, `get_dependencies`, `get_conventions` and `verify_code`; server instructions telling assistants to fetch context first and verify before finishing; an `implement_with_context` prompt. Works with GitHub Copilot agent mode, Claude, Cursor, Copilot CLI and other MCP clients. The index is kept in memory and refreshed automatically when files change; workspace folders come from MCP roots.
+- **Code verifier** (`packages/engine/src/verify.ts`): checks AI-written files for imports of missing files, named or default imports that the module does not export, undeclared packages, and code copied from an existing file; suggests the real names (edit distance + camelCase word overlap). Symbol lookup with "did you mean" suggestions.
+- **Context packs** pick the most relevant excerpt of each file (densest window of task terms) within a character budget, and list declared packages, aliases, conventions, relationships and reuse candidates.
+- **VS Code**: registers the bundled MCP server with Copilot automatically (VS Code 1.101+, feature-detected; older versions keep working). New command **codeDeft: Connect AI Assistants**: Copilot status, a marked section in `.github/copilot-instructions.md`, `.vscode/mcp.json`, or a portable config for other assistants. Setting `codedeft.nodePath`.
+- **codeDeft's own generation** (dashboard and extension) now runs generate → verify → repair: the prompt includes declared packages and grounding rules, every file is verified, remaining problems are sent back to the model once, and the proposal shows the check result. VS Code's approval dialog warns when problems remain.
+- Chat participants were not used: VS Code now recommends tools and MCP servers for extending Copilot.
+
+## 0.11.1 — forest green colour scheme
+
+- Light theme is now **Paper · forest green** (warm off-white, deep forest-green accent) and is the default for new users.
+- Dark theme is its **forest** partner (deep green-grey, soft green accent); High contrast is unchanged.
+- All three themes still pass the WCAG AA contrast test (102 checks) and axe-core in Chrome with 0 violations.
+
+## 0.11.0 — dashboard redesign (Workspace layout), themes, accessibility
+
+- New desktop layout: header with repository switcher (recent repositories, index status), left navigation, always-available chat panel; breakpoints at 1024, 1280 and 1600 px, icon rail and overlay chat on compact screens; no mobile layout (minimum 1024 px).
+- Theme stylesheet (`src/styles/tokens.css`, `base.css`, `layout.css`) with Dark, Light and High contrast themes, System mode following OS colour-scheme and contrast settings, and a Text size setting; all sizes in rem.
+- Every theme's colour pairs are verified against WCAG 2.2 AA by a test (102 checks); axe-core runs on every page in unit tests and, with colour contrast, in Chrome for all three themes: 0 violations.
+- Guided flows: step indicators for Reuse and Figma to code; Figma matches the repository automatically after reading; clear "Next" actions; a Get started checklist; empty states that say what to do.
+- Figma token can be kept for the current tab (memory only) instead of being pasted for every read; it is dropped automatically when Figma rejects it.
+- Keyboard: skip link, focus moves to the page heading on navigation, `Ctrl K`/`⌘ K` jumps to chat, `Esc` closes menus and the chat overlay with focus returned to the trigger.
+
 ## 0.10.0 — unified web dashboard, production hardening
 
 **Web dashboard** (Reuse Intelligence, Figma-to-Code and Chat, ported onto 0.9 with every 0.9 fix intact)

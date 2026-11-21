@@ -79,3 +79,25 @@ test('API-1 clients still understand errors (string `error`, unknown-endpoint te
   assert.equal(r.status,404);assert.equal(b.error,'Unknown API endpoint');assert.equal(b.code,'unsupported_endpoint');
  });
 });
+
+test('generated code is verified against the repository and repaired once when it references things that do not exist', async()=>{
+ const bodies=[];
+ const answers=[
+  {changes:[{path:'src/Checkout.vue',content:'<template><PayButton/></template>\n<script setup lang="ts">\nimport PayButton from "@/components/PayButon.vue"\nimport dayjs from "dayjs"\n</script>\n'}],rationale:'first try'},
+  {changes:[{path:'src/Checkout.vue',content:'<template><PayButton/></template>\n<script setup lang="ts">\nimport PayButton from "@/components/PayButton.vue"\n</script>\n'}],rationale:'fixed'}
+ ];
+ const s=await listen(async(req,res)=>{let b='';for await(const c of req)b+=c;bodies.push(JSON.parse(b));const a=answers[Math.min(bodies.length-1,1)];res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({model:'fake',choices:[{message:{content:JSON.stringify(a)}}]}));});
+ try{await withServer({CODEDEFT_ENDPOINT:`http://127.0.0.1:${s.address().port}/v1`,CODEDEFT_MODEL:'m',CODEDEFT_API_KEY:'k',CODEDEFT_JSON_MODE:'0'},async({api,repo})=>{
+  fs.mkdirSync(path.join(repo,'src/components'),{recursive:true});
+  fs.writeFileSync(path.join(repo,'src/components/PayButton.vue'),'<template><button>Pay now</button></template>\n');
+  fs.writeFileSync(path.join(repo,'package.json'),JSON.stringify({name:'shop',dependencies:{vue:'^3.4.0'}}));
+  const gen=await api.generateIndependent(repo,'checkout page with the pay button');
+  assert.equal(bodies.length,2,'one repair round');
+  const repair=bodies[1].messages.at(-1).content;
+  assert.match(repair,/PayButon\.vue.*does not resolve[\s\S]*Similar files: [^\n]*src\/components\/PayButton\.vue/);
+  assert.match(repair,/dayjs.*not declared/);
+  assert.match(bodies[0].messages[0].content,/Never invent an import path/);
+  assert.match(gen.proposal.changes[0].content,/PayButton\.vue/);
+  assert.equal(gen.verification.ok,true);assert.equal(gen.verification.attempts,2);
+ });}finally{s.close();}
+});

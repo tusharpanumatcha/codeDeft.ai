@@ -6,9 +6,11 @@ import * as fs from 'node:fs';
 import { readFigma, parseFigmaUrl, type DesignDocument } from '../../../packages/figma-reader/src/index';
 import { resolveProposalTarget, proposalPathKey } from '../../../packages/engine/src/safe-path';
 import { createApiClient, endpoints, routeChatMessage, ApiError, type GeneratedProposal, type SearchHit, type ReuseUnit } from '../../../packages/protocol/src/index';
+import { registerMcpServer, registerAiCommands } from './ai';
 
 type ProposedChange = { path: string; content: string };
-type IndependentResult = { decision?: string; approvalRequired?: boolean; proposal?: { changes?: ProposedChange[]; rationale?: string } };
+type Verification = { errors?: number; warnings?: number; attempts?: number; files?: { path?: string; findings?: { severity?: string; message?: string; line?: number }[] }[] };
+type IndependentResult = { decision?: string; approvalRequired?: boolean; proposal?: { changes?: ProposedChange[]; rationale?: string }; verification?: Verification };
 declare const __EXTENSION_VERSION__: string;
 const EXTENSION_VERSION = typeof __EXTENSION_VERSION__ === 'string' ? __EXTENSION_VERSION__ : 'dev';
 
@@ -37,6 +39,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
   const register = (id: string, fn: () => Promise<unknown>) => context.subscriptions.push(vscode.commands.registerCommand(id, () => guard(fn)));
+
+  // AI assistants: register the codeDeft MCP server for Copilot (when this VS Code supports it) and the setup commands.
+  let mcpRegistered = false;
+  try { mcpRegistered = registerMcpServer(context); } catch (e) { output.appendLine(`codeDeft: MCP registration skipped: ${e instanceof Error ? e.message : String(e)}`); }
+  registerAiCommands(context, mcpRegistered, guard);
 
   register('codedeft.index', async () => {
     const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'codeDeft indexing repository' }, () => api.index(root()));
@@ -84,12 +91,21 @@ export function activate(context: vscode.ExtensionContext): void {
     checkNewFiles(folder, changes);
     output.clear(); output.appendLine('codeDeft — INDEPENDENT IMPLEMENTATION\n'); output.appendLine('Existing files will remain unchanged.\n');
     output.appendLine(changes.map(c => `CREATE ${c.path} (${Buffer.byteLength(c.content, 'utf8')} bytes)`).join('\n'));
-    output.appendLine('\n' + String(result.proposal?.rationale || '')); output.show(true);
+    output.appendLine('\n' + String(result.proposal?.rationale || ''));
+    // codeDeft's check of the generated code against the repository (files, exports, packages, duplication).
+    const v = result.verification;
+    const problems = v && typeof v.errors === 'number' ? v.errors : 0;
+    if (v) {
+      output.appendLine(`\nRepository check: ${problems ? `${problems} reference${problems === 1 ? '' : 's'} do not exist` : 'all imported files, exports and packages exist'}${(v.attempts ?? 1) > 1 ? ` (after ${(v.attempts ?? 1) - 1} automatic fix round${(v.attempts ?? 1) > 2 ? 's' : ''})` : ''}`);
+      for (const f of v.files ?? []) for (const x of f.findings ?? []) output.appendLine(`  ${String(x.severity).toUpperCase()} ${f.path}${x.line ? `:${x.line}` : ''}  ${x.message}`);
+    }
+    output.show(true);
     for (const change of changes) {
       const language = change.path.endsWith('.vue') ? 'vue' : change.path.endsWith('.tsx') ? 'typescriptreact' : change.path.endsWith('.ts') ? 'typescript' : change.path.endsWith('.js') ? 'javascript' : 'plaintext';
       await vscode.window.showTextDocument(await vscode.workspace.openTextDocument({ language, content: change.content }), { preview: true, preserveFocus: false });
     }
-    const approval = await vscode.window.showWarningMessage(`Create ${changes.length} new file(s)? Existing files will not be modified. Review codeDeft output and preview tabs first.`, { modal: true }, 'Approve and Create');
+    const warning = problems ? `${problems} reference${problems === 1 ? '' : 's'} in this proposal do not exist in the repository (see the codeDeft output). ` : '';
+    const approval = await vscode.window.showWarningMessage(`${warning}Create ${changes.length} new file(s)? Existing files will not be modified. Review codeDeft output and preview tabs first.`, { modal: true }, 'Approve and Create');
     if (approval !== 'Approve and Create') return false;
     // Recheck after approval: another process may have created a file or symlink while the user reviewed.
     const targets = checkNewFiles(folder, changes);
@@ -227,3 +243,4 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {}
+export { mergeInstructions, mergeWorkspaceMcp, COPILOT_INSTRUCTIONS } from './ai';

@@ -1,0 +1,116 @@
+/*
+ * codeDeft design tokens. Every colour, size and motion value the dashboard uses comes from here.
+ *
+ * Themes: data-theme="dark" | "light" | "contrast" on <html> (set by state/preferences.tsx, which follows
+ * the OS colour-scheme and "increase contrast" settings when the user picks "System").
+ * Every text/background pair below is checked against WCAG 2.2 AA by tests/theme-contrast.test.ts:
+ * body text ≥ 4.5:1, UI boundaries and focus rings ≥ 3:1. Change a value, run the test.
+ *
+ * Sizes are in rem so the Text size preference (html font-size 100% / 112.5% / 125%) scales everything.
+ */
+:root {
+  /* type */
+  --font-sans: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;   /* 12px, metadata only */
+  --text-sm: 0.8125rem; /* 13px */
+  --text-md: 0.9375rem; /* 15px body */
+  --text-lg: 1.0625rem; /* 17px */
+  --text-xl: 1.375rem;  /* 22px */
+  --text-2xl: 1.75rem;  /* 28px page titles */
+  --leading: 1.55;
+  --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
+
+  /* space (4px grid) */
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem;
+  --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem;
+
+  /* shape */
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-pill: 999px;
+  --border-width: 1px;
+  --focus-width: 3px;
+
+  /* targets and layout */
+  --target-min: 2.75rem; /* 44px */
+  --header-h: 4.25rem;
+  --content-max: 80rem;
+
+  /* motion */
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --duration: 160ms;
+}
+
+/* Forest dark: the dark partner of the Paper · forest palette (also the fallback if no theme is set). */
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1412;
+  --surface: #161d1a;
+  --surface-2: #121815;
+  --surface-raised: #1b2420;
+  --text: #e8eeea;
+  --text-muted: #a3b1aa;
+  --border: #26312c;          /* decorative dividers only */
+  --border-strong: #6d8379;   /* inputs, controls: 3:1 */
+  --accent: #6fbf9f;
+  --accent-hover: #8ad0b3;
+  --on-accent: #06140e;
+  --accent-soft: #1d3329;
+  --link: #8fd4b8;
+  --success: #7ddc9f; --success-soft: #12301e;
+  --warning: #f2c36b; --warning-soft: #31270f;
+  --danger: #ff9b9b;  --danger-soft: #3a1717;
+  --focus: #ffd166;
+  --shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+
+/* Paper · forest (light, default): warm off-white with a deep forest-green accent. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #faf9f7;
+  --surface: #ffffff;
+  --surface-2: #f3f1ed;
+  --surface-raised: #ffffff;
+  --text: #1c1917;
+  --text-muted: #57534e;
+  --border: #e7e5e4;
+  --border-strong: #78716c;
+  --accent: #2f5d50;
+  --accent-hover: #244a40;
+  --on-accent: #ffffff;
+  --accent-soft: #e4efe9;
+  --link: #23614f;
+  --success: #166534; --success-soft: #e7f6ec;
+  --warning: #8a4b00; --warning-soft: #fdf1dc;
+  --danger: #b42318;  --danger-soft: #fde8e6;
+  --focus: #1f4a3f;
+  --shadow: 0 12px 32px rgba(28, 25, 23, .12);
+}
+
+/* High contrast: pure black/white, thick boundaries, no reliance on subtle surfaces. */
+:root[data-theme="contrast"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #000000;
+  --surface-2: #000000;
+  --surface-raised: #0a0a0a;
+  --text: #ffffff;
+  --text-muted: #e6e6e6;
+  --border: #ffffff;
+  --border-strong: #ffffff;
+  --accent: #ffd400;
+  --accent-hover: #ffe55c;
+  --on-accent: #000000;
+  --accent-soft: #1f1a00;
+  --link: #8fd0ff;
+  --success: #7dffb3; --success-soft: #002b14;
+  --warning: #ffd400; --warning-soft: #2b2400;
+  --danger: #ff9e9e;  --danger-soft: #330000;
+  --focus: #ffffff;
+  --border-width: 2px;
+  --focus-width: 4px;
+  --shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --duration: 0ms; }
+}

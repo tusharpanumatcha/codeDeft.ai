@@ -11,10 +11,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <section className="panel alert" role="alert">
-        <h3>The {this.props.name} panel hit an unexpected error</h3>
+      <section className="card" role="alert">
+        <h2>The {this.props.name} panel hit an unexpected error</h2>
         <p className="muted">{this.state.error.message}</p>
-        <button type="button" onClick={() => this.setState({ error: null })}>Reload this panel</button>
+        <div className="row"><button type="button" className="btn btn-secondary" onClick={() => this.setState({ error: null })}>Reload this panel</button></div>
       </section>
     );
   }

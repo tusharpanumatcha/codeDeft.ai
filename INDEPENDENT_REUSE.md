@@ -1,5 +1,7 @@
 # Independent component decision (codeDeft)
 
+![A proposal passes a safety gate, is previewed in VS Code and creates only new files after Approve and Create; cancelling changes nothing.](docs/images/independent-proposals.svg)
+
 Use **codeDeft: Generate Independent Feature (Review First)** from the VS Code Command Palette.
 
 The engine retrieves existing repository context for conventions, but instructs the model to create **new files only**, without importing or extracting existing application form/component implementations. The server rejects generated proposals that target existing files or unsafe paths: anything outside the repository, `node_modules`, or any hidden/config segment starting with `.` (`.git`, `.vscode`, `.github`, `.husky`, `.env*`, `.npmrc`…). Paths are compared case-insensitively, matching macOS and Windows file systems; the server and extension share this rule (`packages/engine/src/safe-path.ts`). The VS Code extension shows all proposed paths in the codeDeft Output panel, opens each proposed file in an unsaved preview, and asks for explicit **Approve and Create** confirmation. Cancelling makes no changes. Before applying, the extension rechecks that no proposed file already exists. VS Code WorkspaceEdit creates the files with their full contents and overwrite disabled, so they are complete on disk without a manual save, and the creation can be undone with Undo.

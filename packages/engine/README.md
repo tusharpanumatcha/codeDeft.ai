@@ -1,4 +1,6 @@
-# codeDeft Engine v0.9.0
+# codeDeft Engine v1.0.0
+
+![Repository files are indexed into symbols, exports, imports and resolved aliases, built into a dependency graph, stored in SQLite and used for search, agent plans, verification and evaluation.](../../docs/images/engine-pipeline.svg)
 
 Standalone Node.js + TypeScript repository intelligence prototype. No UI. The only network call is the opt-in `generateWithModel`.
 
@@ -122,16 +124,16 @@ npm test
 npm run build
 
 # Index and persist a local repository (creates data/codedeft.db)
-node dist/cli.js db-index "/Users/tushar/Documents/code-deft-source"
+node dist/cli.js db-index "path"
 
 # See stored counts and repository profile
-node dist/cli.js db-info "/Users/tushar/Documents/code-deft-source"
+node dist/cli.js db-info "path"
 
 # Retrieve context from SQLite, without rescanning the source files
-node dist/cli.js db-context "/Users/tushar/Documents/code-deft-source" "How does authentication work?"
+node dist/cli.js db-context "path" "How does authentication work?"
 
 # Create an agent plan using persisted repository knowledge
-node dist/cli.js db-agent "/Users/tushar/Documents/code-deft-source" "Create a customer management page"
+node dist/cli.js db-agent "path" "Create a customer management page"
 
 # Optional custom database location; append to any db-* command
 node dist/cli.js db-index "/path/to/repo" --db "/path/to/my-codedeft.db"

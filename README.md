@@ -1,10 +1,20 @@
-# codeDeft · v0.10
+<p align="center"><img src="docs/brand/codedeft-logo-tagline.svg" alt="codeDeft — Understand First. Code Better." width="520"/></p>
+
+# codeDeft · v1.0
 
 **Understand First. Code Better.**
 
-![codeDeft Hybrid Architecture](./assets/codedeft-architecture.png)
-
 A local-first repository intelligence tool: a TypeScript/SQLite engine, a local API server with a React dashboard, and a VS Code extension. It indexes a repository, answers questions with cited files, shows the import graph, finds reusable code, imports Figma designs, and generates **new-file-only** proposals that you review and approve before anything is written.
+
+![How codeDeft fits together: AI assistants, the web dashboard and the VS Code extension use the codeDeft MCP server and local API server, which use the engine and SQLite. Your repository is only read.](docs/images/architecture.svg)
+
+![The codeDeft dashboard: features in the sidebar, the feature conversation in the middle, and the feature context panel on the right.](docs/images/feature-chat.png)
+
+*The dashboard: one conversation per feature, saved in SQLite, with its Figma frame, reuse decisions, dependencies and proposals.*
+
+## Use it with Copilot and other AI assistants
+
+codeDeft's main job is to give AI assistants **correct context** so they do not hallucinate files, functions or packages. It runs as an MCP server that GitHub Copilot (agent mode), Claude, Cursor and others call: `get_task_context` before writing code, `verify_code` before finishing, plus search, symbol lookup, reuse discovery and dependencies. In VS Code the extension registers it with Copilot automatically. See **[AI_ASSISTANTS.md](AI_ASSISTANTS.md)**.
 
 ## Requirements
 
@@ -21,13 +31,23 @@ npm start            # http://127.0.0.1:4317
 
 `npm start` runs a pre-flight check first: it refuses to start if a required part is not built and warns when a build is older than its source (the cause of blank pages and "Unknown API endpoint" errors). The server locates its files relative to itself, so it also works when started from another directory. If only the dashboard is missing, `/` explains how to build it; the API still works.
 
+## Web dashboard
+
+- **Feature chats.** Each feature you build is its own conversation: features in the left sidebar (search by name or file, status per feature), the conversation in the middle, and the **Feature context** panel on the right (Summary · Design · Reuse · Files · Proposal). Paste a Figma link, type `/reuse`, `/figma`, `/graph` or `/generate`, or just ask. Chats are stored in the server's SQLite database (`CODEDEFT_DB`), so they survive reloads and restarts; generation runs in the background.
+- **Layout (desktop only).** ≥ 1600 px: 272 px sidebar, 400 px context panel; 1280–1599 px: 256/360 px; 1024–1279 px: the context panel opens as an overlay (**Context** button). Below 1024 px the page scrolls horizontally; phones and tablets are not supported.
+- **Themes.** Light (*Paper · forest green*, the default), Dark (forest green on deep green-grey) and High contrast, or **System** (follows your OS, including *Increase contrast*). Choose with the palette button in the header, where you can also set **Text size** (100 %, 112 %, 125 %). Choices are saved in this browser.
+- **Stylesheet.** `apps/web-dashboard/src/styles/`: `tokens.css` (every colour, size and motion value, per theme), `base.css` (elements and components), `layout.css` (desktop grid and breakpoints). To add a theme, copy a `[data-theme]` block in `tokens.css`, add it to `tests/theme-contrast.test.ts` and `state/preferences.tsx`; the test fails if any text or control falls below WCAG AA contrast.
+- **Accessibility.** WCAG 2.2 AA target: skip link, landmarks, one heading per page that receives focus on navigation, labelled fields with hints and errors, visible focus rings, 44 px targets, status and errors announced, no information by colour alone, reduced-motion support, `Ctrl K` / `⌘ K` to jump to chat, `Esc` closes menus and the chat overlay. Checked by axe-core in the unit tests and in Chrome (including colour contrast) for every page and theme.
+- **Figma token.** Paste it once per tab: with *Keep me connected in this tab* it is held in memory only (never saved; gone on reload, tab close or **Disconnect**) and forgotten automatically if Figma rejects it.
+
 ## Architecture
 
 ```
+apps/mcp-server        MCP server for Copilot/Claude/Cursor: grounded context + code verification (bundled, read-only)
 packages/protocol      shared contract: wire types, API version + capabilities, resilient HTTP client, chat router
-packages/engine        indexing, retrieval, evaluation, validation, the shared path-safety rule
+packages/engine        indexing, retrieval, evaluation, validation, code verification (verify.ts), the shared path-safety rule
 packages/figma-reader  Figma URL parsing, REST client, normalisation
-apps/server            local API (127.0.0.1 only) + dashboard host; in-memory design and proposal stores
+apps/server            local API (127.0.0.1 only) + dashboard host; SQLite store for feature chats, designs and proposals
 apps/web-dashboard     React dashboard: one component per view, error boundaries, vitest + jsdom tests
 apps/vscode-extension  commands, review/approval flow, vscode:// proposal handoff (bundled with esbuild)
 ```
@@ -41,11 +61,11 @@ Changes within an API version are additive. Every response is normalised before 
 
 **Large designs stay on the server.** `/api/figma/read` stores the normalised design in a bounded LRU cache (entry, byte and sliding-TTL budgets; content-addressed ids) and returns a short `designId`. Analysis and generation reference that id instead of re-uploading megabytes. The VS Code extension still sends designs inline, which every server version accepts.
 
-**Dashboard → VS Code handoff.** Generated proposals are stored (random ids, bounded cache) and the dashboard shows **Open in VS Code**, a `vscode://codedeft-local.codedeft-vscode/proposal?id=…` link. The extension fetches the proposal and runs the same review-and-approve flow; it warns if the proposal was generated for a different folder. **codeDeft: Open Proposal by ID** does the same from the Command Palette. Stores live in server memory and are cleared on restart.
+**Dashboard → VS Code handoff.** Generated proposals are stored (random ids, bounded cache) and the dashboard shows **Open in VS Code**, a `vscode://codedeft-local.codedeft-vscode/proposal?id=…` link. The extension fetches the proposal and runs the same review-and-approve flow; it warns if the proposal was generated for a different folder. **codeDeft: Open Proposal by ID** does the same from the Command Palette. Proposals are stored in SQLite (365 days by default).
 
 **Chat routing.** One deterministic, tested router (`routeChatMessage`) is used by both the dashboard and the extension. A Figma link anywhere in a message is extracted exactly; otherwise weighted evidence decides between reuse and search, and weak or ambiguous wording falls back to read-only search.
 
-Open **http://127.0.0.1:4317**, enter the absolute path of a repository and click **Index repository**. The database is stored in `data/codedeft.db` (git-ignored; override with `CODEDEFT_DB`).
+Open **http://127.0.0.1:4317**, click **Choose repository** (top left), enter the repository's full path and choose **Index**. Recent repositories are listed there for one-click switching. The database is stored in `data/codedeft.db` (git-ignored; override with `CODEDEFT_DB`).
 
 ### VS Code extension
 

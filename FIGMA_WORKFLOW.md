@@ -1,4 +1,6 @@
-# codeDeft Figma-to-Code (v0.10)
+# codeDeft Figma-to-Code (v1.0)
+
+![A Figma frame is read once with your token, summarised, matched to existing files and combined with your reuse choices into a verified proposal of new files that you approve in VS Code.](docs/images/figma-workflow.svg)
 
 ## Setup
 
@@ -11,7 +13,7 @@ In VS Code, open `apps/vscode-extension` and press F5 to launch the Extension De
 
 ### Web dashboard
 
-Open **Figma-to-Code** (or paste a Figma link into Chat). Paste the frame link and your token and choose **Read design**. Here the token **is** sent to the local codeDeft server, which uses it for that one request to Figma. It is not stored (browser or server), not logged and never included in responses or errors. The token field is cleared after a successful read and kept after a failed one so you can retry. The design stays on the server (see the README's Architecture section) and the page works with a short `designId`, so large designs do not slow the page down or hit the request limit. Generated proposals can be opened in VS Code with **Open in VS Code** for review and approval.
+In a feature chat, paste the frame link (on its own or inside a sentence) or type `/figma`. codeDeft asks for your token; choose **Read frame**. The design summary, the closest existing files and your reuse choices are saved with the feature. Here the token **is** sent to the local codeDeft server, which uses it for that one request to Figma. It is not stored (browser or server), not logged and never included in responses or errors. The token field is cleared after a successful read and kept after a failed one so you can retry. The design stays on the server (see the README's Architecture section) and the page works with a short `designId`, so large designs do not slow the page down or hit the request limit. Generated proposals can be opened in VS Code with **Open in VS Code** for review and approval.
 
 Use a Figma token with read access to the file. The Figma API may return 403 if permissions/scopes are insufficient.
 

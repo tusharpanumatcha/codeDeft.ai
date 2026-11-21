@@ -32,6 +32,12 @@ test('server refuses DNS-rebinding hosts, foreign origins and non-JSON POSTs, an
   const page=await request(port,{pathname:'/'});
   if(page.status===200){assert.match(page.headers['content-security-policy'],/default-src 'self'/);assert.doesNotMatch(page.body,/codedeft-token/,'no token meta without CODEDEFT_TOKEN');}
   else assert.equal(page.status,503,'unbuilt dashboard answers 503, not a crash');
+  if(page.status===200){
+   const icon=await request(port,{pathname:'/favicon.svg'});
+   assert.equal(icon.status,200);assert.equal(icon.headers['content-type'],'image/svg+xml');assert.match(icon.headers['content-security-policy'],/default-src 'none'/);
+   assert.equal((await request(port,{pathname:'/favicon-32.png'})).headers['content-type'],'image/png');
+  }
+  assert.equal((await request(port,{pathname:'/index.js'})).status,404,'only allowlisted files are served');
  });
 });
 test('with CODEDEFT_TOKEN the API requires it and the same-origin dashboard receives it',async()=>{
